@@ -1,0 +1,80 @@
+name: Build & Release APK
+
+on:
+  push:
+    tags:
+      - 'v*' # 只要推送以 v 开头的 tag（如 v0.1.0），就会自动触发
+  workflow_dispatch: # 同时也支持在 GitHub 网页上手动点击一键运行
+
+permissions:
+  contents: write # 赋予创建 Release 和上传资源的写入权限
+
+jobs:
+  build:
+    name: Build & Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 配置 Java 17 环境
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: 配置 Flutter 环境
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: 获取项目依赖
+        run: flutter pub get
+
+      - name: 自动化提取当前版本更新日志
+        run: |
+          python3 - << 'EOF'
+          import re
+
+          try:
+              with open("lib/core/version_history.dart", "r", encoding="utf-8") as f:
+                  content = f.read()
+
+              # 匹配首个版本的 changeLogs 数组内容
+              match = re.search(r"changeLogs:\s*\[(.*?)\]", content, re.DOTALL)
+              if match:
+                  raw_logs = match.group(1)
+                  # 提取每行单引号或双引号内的文字
+                  items = re.findall(r"['\"](.*?)['\"]", raw_logs)
+                  notes = "\n".join([f"- {item}" for item in items if item.strip()])
+              else:
+                  notes = "常规更新与细节优化。"
+          except Exception as e:
+              notes = "常规更新与细节优化。"
+
+          with open("RELEASE_NOTES.md", "w", encoding="utf-8") as out:
+              out.write(notes + "\n")
+          EOF
+          cat RELEASE_NOTES.md
+
+      - name: 编译 Android Release APK
+        run: flutter build apk --release
+
+      - name: 整理并重命名构建产物
+        run: |
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          mkdir -p dist
+          # 将编译好的 APK 拷贝并加上具体版本号
+          cp build/app/outputs/flutter-apk/app-release.apk "dist/rsip-${TAG_NAME}.apk"
+
+      - name: 发布 Release 并挂载 APK 与日志
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: RELEASE_NOTES.md
+          files: dist/*.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
