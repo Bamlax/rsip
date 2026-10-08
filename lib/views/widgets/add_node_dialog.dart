@@ -5,8 +5,9 @@ import '../../models/focus_node_model.dart';
 
 class AddNodeDialog extends StatefulWidget {
   final RsipEngine engine;
+  final Offset? spawnPosition; // 目标生成位置（屏幕正中心）
 
-  const AddNodeDialog({super.key, required this.engine});
+  const AddNodeDialog({super.key, required this.engine, this.spawnPosition});
 
   @override
   State<AddNodeDialog> createState() => _AddNodeDialogState();
@@ -16,6 +17,10 @@ class _AddNodeDialogState extends State<AddNodeDialog> {
   final _titleController = TextEditingController();
   final _contentController = TextEditingController();
   bool _isPrompt = false;
+
+  // 左右长方形块控制开关
+  bool _promptNoteOnIncrease = true;
+  bool _promptNoteOnDecrease = true;
 
   final List<TextEditingController> _attrNameControllers = [];
   final List<TextEditingController> _attrUnitControllers = [];
@@ -49,6 +54,54 @@ class _AddNodeDialogState extends State<AddNodeDialog> {
     });
   }
 
+  Widget _buildToggleBlock({
+    required String label,
+    required bool isSelected,
+    required Color activeColor,
+    required Color activeBg,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(vertical: 9),
+        decoration: BoxDecoration(
+          color: isSelected ? activeBg : AppTheme.bgCanvas,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: isSelected
+                ? activeColor.withValues(alpha: 0.5)
+                : AppTheme.borderLight,
+            width: isSelected ? 1.3 : 1.0,
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              isSelected
+                  ? Icons.check_circle_rounded
+                  : Icons.radio_button_unchecked_rounded,
+              size: 14,
+              color: isSelected ? activeColor : Colors.black26,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                color: isSelected ? activeColor : Colors.black54,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
@@ -56,7 +109,11 @@ class _AddNodeDialogState extends State<AddNodeDialog> {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       title: Text(
         _isPrompt ? '添加提示节点' : '添加国策节点',
-        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppTheme.deepNavy),
+        style: const TextStyle(
+          fontSize: 18,
+          fontWeight: FontWeight.w800,
+          color: AppTheme.deepNavy,
+        ),
       ),
       content: SizedBox(
         width: double.maxFinite,
@@ -125,9 +182,39 @@ class _AddNodeDialogState extends State<AddNodeDialog> {
                 ),
               ),
 
-              // 属性定义区：仅填名称与单位，数值在加减进度时填入
+              // 横向一行左右两边的长方形块
               if (!_isPrompt) ...[
-                const SizedBox(height: 16),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildToggleBlock(
+                        label: '增加备注',
+                        isSelected: _promptNoteOnIncrease,
+                        activeColor: Colors.green.shade700,
+                        activeBg: const Color(0xFFF2FBF4),
+                        onTap: () => setState(
+                          () => _promptNoteOnIncrease = !_promptNoteOnIncrease,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _buildToggleBlock(
+                        label: '减少备注',
+                        isSelected: _promptNoteOnDecrease,
+                        activeColor: Colors.red.shade700,
+                        activeBg: const Color(0xFFFDF3F3),
+                        onTap: () => setState(
+                          () => _promptNoteOnDecrease = !_promptNoteOnDecrease,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+
+                // 数字属性定义
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
@@ -136,7 +223,11 @@ class _AddNodeDialogState extends State<AddNodeDialog> {
                       children: [
                         Text(
                           '数字属性定义',
-                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppTheme.deepNavy),
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                            color: AppTheme.deepNavy,
+                          ),
                         ),
                         Text(
                           '数值将在每次加减打卡中录入',
@@ -145,9 +236,21 @@ class _AddNodeDialogState extends State<AddNodeDialog> {
                       ],
                     ),
                     TextButton.icon(
-                      style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
-                      icon: const Icon(Icons.add, size: 16, color: AppTheme.primaryBlue),
-                      label: const Text('添加属性', style: TextStyle(fontSize: 12, color: AppTheme.primaryBlue)),
+                      style: TextButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      icon: const Icon(
+                        Icons.add,
+                        size: 16,
+                        color: AppTheme.primaryBlue,
+                      ),
+                      label: const Text(
+                        '添加属性',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: AppTheme.primaryBlue,
+                        ),
+                      ),
                       onPressed: _addNumericField,
                     ),
                   ],
@@ -193,7 +296,11 @@ class _AddNodeDialogState extends State<AddNodeDialog> {
                           ),
                         ),
                         IconButton(
-                          icon: const Icon(Icons.remove_circle_outline, size: 18, color: Colors.redAccent),
+                          icon: const Icon(
+                            Icons.remove_circle_outline,
+                            size: 18,
+                            color: Colors.redAccent,
+                          ),
                           padding: EdgeInsets.zero,
                           constraints: const BoxConstraints(),
                           onPressed: () => _removeNumericField(index),
@@ -217,7 +324,9 @@ class _AddNodeDialogState extends State<AddNodeDialog> {
             backgroundColor: AppTheme.primaryBlue,
             foregroundColor: Colors.white,
             elevation: 0,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
+            ),
           ),
           child: const Text('添加'),
           onPressed: () {
@@ -225,7 +334,9 @@ class _AddNodeDialogState extends State<AddNodeDialog> {
             if (content.isEmpty) return;
 
             final title = _isPrompt
-                ? (_titleController.text.trim().isEmpty ? '提示' : _titleController.text.trim())
+                ? (_titleController.text.trim().isEmpty
+                      ? '提示'
+                      : _titleController.text.trim())
                 : _titleController.text.trim();
 
             if (!_isPrompt && title.isEmpty) return;
@@ -235,7 +346,9 @@ class _AddNodeDialogState extends State<AddNodeDialog> {
               final name = _attrNameControllers[i].text.trim();
               final unit = _attrUnitControllers[i].text.trim();
               if (name.isNotEmpty) {
-                attrs.add(NumericAttribute(name: name, unit: unit.isEmpty ? '项' : unit));
+                attrs.add(
+                  NumericAttribute(name: name, unit: unit.isEmpty ? '项' : unit),
+                );
               }
             }
 
@@ -243,7 +356,11 @@ class _AddNodeDialogState extends State<AddNodeDialog> {
               title: title,
               content: content,
               isPrompt: _isPrompt,
+              promptNoteOnIncrease: _promptNoteOnIncrease,
+              promptNoteOnDecrease: _promptNoteOnDecrease,
               numericAttributes: attrs,
+              x: widget.spawnPosition?.dx,
+              y: widget.spawnPosition?.dy,
             );
             Navigator.pop(context);
           },

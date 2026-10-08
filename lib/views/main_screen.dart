@@ -60,34 +60,41 @@ class _MainScreenState extends State<MainScreen> {
                     ],
                   )
                 : selectedConnection != null
-                    // 1. 选中连线时的顶栏标题
-                    ? const Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.hub_outlined, size: 20, color: AppTheme.primaryBlue),
-                          SizedBox(width: 8),
-                          Text(
-                            '国策连线',
-                            style: TextStyle(
-                              color: AppTheme.deepNavy,
-                              fontSize: 16,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                        ],
-                      )
-                    : selectedNode == null
-                        ? const Text(
-                            'RSIP',
-                            style: TextStyle(
-                              color: Colors.black,
-                              fontSize: 22,
-                              fontWeight: FontWeight.w900,
-                              letterSpacing: 1.5,
-                            ),
-                          )
-                        : _buildSelectedNodeTitle(selectedNode),
-            actions: _buildAppBarActions(selectedNode, selectedConnection, inGroupMode),
+                ? const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.hub_outlined,
+                        size: 20,
+                        color: AppTheme.primaryBlue,
+                      ),
+                      SizedBox(width: 8),
+                      Text(
+                        '连线',
+                        style: TextStyle(
+                          color: AppTheme.deepNavy,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
+                  )
+                : selectedNode == null
+                ? const Text(
+                    'RSIP',
+                    style: TextStyle(
+                      color: Colors.black,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 1.5,
+                    ),
+                  )
+                : _buildSelectedNodeTitle(selectedNode),
+            actions: _buildAppBarActions(
+              selectedNode,
+              selectedConnection,
+              inGroupMode,
+            ),
           ),
           body: IndexedStack(
             index: _currentViewIndex,
@@ -184,7 +191,9 @@ class _MainScreenState extends State<MainScreen> {
             color: ProgressColorHelper.getBgColor(node.progress),
             borderRadius: BorderRadius.circular(4),
             border: Border.all(
-              color: ProgressColorHelper.getColor(node.progress).withValues(alpha: 0.5),
+              color: ProgressColorHelper.getColor(
+                node.progress,
+              ).withValues(alpha: 0.5),
             ),
           ),
           child: Text(
@@ -282,7 +291,10 @@ class _MainScreenState extends State<MainScreen> {
       // 常规节点：保留进度加减、详情入口与取消
       return [
         IconButton(
-          icon: const Icon(Icons.remove_circle_outline, color: Colors.redAccent),
+          icon: const Icon(
+            Icons.remove_circle_outline,
+            color: Colors.redAccent,
+          ),
           tooltip: '进度 -1',
           onPressed: () => _handleProgressChange(selectedNode, -1),
         ),
@@ -292,7 +304,10 @@ class _MainScreenState extends State<MainScreen> {
           onPressed: () => _handleProgressChange(selectedNode, 1),
         ),
         IconButton(
-          icon: const Icon(Icons.assessment_outlined, color: AppTheme.primaryBlue),
+          icon: const Icon(
+            Icons.assessment_outlined,
+            color: AppTheme.primaryBlue,
+          ),
           tooltip: '查看节点详情与管理',
           onPressed: () => _openNodeDetail(selectedNode.id),
         ),
@@ -327,9 +342,7 @@ class _MainScreenState extends State<MainScreen> {
             ScaffoldMessenger.of(context).hideCurrentSnackBar();
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text(
-                  _isConnectMode ? '连线模式：依次点击两个国策建立连线' : '已退出连线模式',
-                ),
+                content: Text(_isConnectMode ? '连线模式：依次点击两个国策建立连线' : '已退出连线模式'),
                 duration: const Duration(seconds: 2),
                 behavior: SnackBarBehavior.floating,
               ),
@@ -420,10 +433,8 @@ class _MainScreenState extends State<MainScreen> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (ctx) => NodeDetailScreen(
-          nodeId: nodeId,
-          engine: widget.engine,
-        ),
+        builder: (ctx) =>
+            NodeDetailScreen(nodeId: nodeId, engine: widget.engine),
       ),
     );
   }
@@ -480,17 +491,16 @@ class _MainScreenState extends State<MainScreen> {
               backgroundColor: AppTheme.primaryBlue,
               foregroundColor: Colors.white,
               elevation: 0,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
             ),
             child: const Text('确认生成'),
             onPressed: () {
               final title = nameController.text.trim();
               if (title.isEmpty) return;
 
-              widget.engine.addGroup(
-                title: title,
-                nodeIds: selectedIds,
-              );
+              widget.engine.addGroup(title: title, nodeIds: selectedIds);
               widget.engine.cancelGroupSelectMode();
               Navigator.pop(ctx);
             },
@@ -499,11 +509,13 @@ class _MainScreenState extends State<MainScreen> {
       ),
     );
   }
+// 在 lib/views/main_screen.dart 的 _handleProgressChange 方法中：
 
   Future<void> _handleProgressChange(FocusNodeModel node, int delta) async {
+    // 读取当前节点自定义的备注开关
     final shouldPrompt = delta > 0
-        ? widget.engine.promptNoteOnIncrease
-        : widget.engine.promptNoteOnDecrease;
+        ? node.promptNoteOnIncrease
+        : node.promptNoteOnDecrease;
 
     if (shouldPrompt || node.numericAttributes.isNotEmpty) {
       final result = await showDialog<ProgressSubmitData?>(

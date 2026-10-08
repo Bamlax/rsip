@@ -16,6 +16,15 @@ class VersionHistoryConfig {
   static const String currentVersion = '0.1.0';
 
   static const List<VersionRelease> releases = [
+      VersionRelease(
+      version: '0.2.0',
+      releaseDate: '2026-10-08',
+      changeLogs: [
+        '新增：大节点的连线功能',
+        '新增：节点备注的自定义弹出',
+        '优化：新建节点的位置',
+      ],
+    ),
     VersionRelease(
       version: '0.1.0',
       releaseDate: '2026-10-04',

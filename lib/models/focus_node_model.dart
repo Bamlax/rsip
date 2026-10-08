@@ -1,10 +1,10 @@
 /// 国策的数字属性定义与累计值
 class NumericAttribute {
   final String id;
-  String name;       // 属性名称 (如: 耗时, 里程, 词汇量)
-  String unit;       // 单位 (如: 分钟, km, 个)
-  double totalValue; // 累计总数值
-  int count;         // 录入频次
+  String name;
+  String unit;
+  double totalValue;
+  int count;
 
   NumericAttribute({
     String? id,
@@ -75,9 +75,13 @@ class FocusNodeModel {
   int progress;
   int increaseCount;
   int decreaseCount;
-  int version; // 最初版为 1
+  int version;
   bool isPrompt;
   String? latestNote;
+
+  // 节点自定义备注弹窗开关
+  bool promptNoteOnIncrease;
+  bool promptNoteOnDecrease;
 
   List<NumericAttribute>? _numericAttributes;
   List<NumericAttribute> get numericAttributes => _numericAttributes ??= [];
@@ -97,6 +101,8 @@ class FocusNodeModel {
     this.version = 1,
     this.isPrompt = false,
     this.latestNote,
+    this.promptNoteOnIncrease = true,
+    this.promptNoteOnDecrease = true,
     List<NumericAttribute>? numericAttributes,
     this.x,
     this.y,
@@ -114,6 +120,8 @@ class FocusNodeModel {
         'version': version,
         'isPrompt': isPrompt,
         'latestNote': latestNote,
+        'promptNoteOnIncrease': promptNoteOnIncrease,
+        'promptNoteOnDecrease': promptNoteOnDecrease,
         'numericAttributes':
             numericAttributes.map((attr) => attr.toJson()).toList(),
         'x': x,
@@ -131,6 +139,8 @@ class FocusNodeModel {
         version: json['version'] as int? ?? 1,
         isPrompt: json['isPrompt'] as bool? ?? false,
         latestNote: json['latestNote'] as String?,
+        promptNoteOnIncrease: json['promptNoteOnIncrease'] as bool? ?? true,
+        promptNoteOnDecrease: json['promptNoteOnDecrease'] as bool? ?? true,
         numericAttributes: (json['numericAttributes'] as List<dynamic>?)
             ?.map((e) => NumericAttribute.fromJson(e as Map<String, dynamic>))
             .toList(),
@@ -222,7 +232,7 @@ class ProgressRecord {
   final String? newTitle;
   final String? oldContent;
   final String? newContent;
-  final List<AttributeChange>? attributeChanges; // 记录属性的增删改差异
+  final List<AttributeChange>? attributeChanges;
   final DateTime time;
 
   ProgressRecord({

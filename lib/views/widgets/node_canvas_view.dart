@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../core/app_theme.dart';
@@ -26,17 +27,17 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
 
   String? _connectStartId;
 
-  // 节点拖拽
+  // 节点相对增量拖动状态
   String? _draggingNodeId;
   Offset? _nodeDragStartFingerPos;
   Offset? _nodeDragStartPos;
 
-  // 大节点组拖拽
+  // 大节点组拖拽状态
   String? _draggingGroupId;
   Offset? _groupDragStartFingerPos;
   Map<String, Offset>? _groupDragStartPositions;
 
-  // 框选
+  // 空白区域框选多选状态
   bool _isMarqueeSelecting = false;
   Offset? _marqueeStart;
   Offset? _marqueeEnd;
@@ -48,8 +49,8 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
 
   static const double _normalWidth = 175.0;
   static const double _normalHeight = 88.0;
-  static const double _promptWidth = 145.0;
-  static const double _promptHeight = 54.0;
+  static const double _promptWidth = 150.0;
+  static const double _promptHeight = 56.0;
 
   @override
   void initState() {
@@ -63,6 +64,7 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
     super.dispose();
   }
 
+  /// 居中视角并聚焦现有所有国策的中心质心
   void centerView() {
     if (!mounted) return;
     final screenWidth = MediaQuery.of(context).size.width;
@@ -96,6 +98,27 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
       ..setEntry(1, 3, ty);
   }
 
+  /// 实时计算当前屏幕视口在 6000x6000 画布上的真实正中心坐标
+  Offset _getViewportCenterInCanvas() {
+    final double screenWidth = MediaQuery.of(context).size.width;
+    final double screenHeight = MediaQuery.of(context).size.height;
+
+    final double scale = _controller.value.getMaxScaleOnAxis();
+    final double tx = _controller.value.entry(0, 3);
+    final double ty = _controller.value.entry(1, 3);
+
+    final double screenCenterX = screenWidth / 2;
+    final double screenCenterY = screenHeight / 2;
+
+    final double canvasCenterX = (screenCenterX - tx) / scale;
+    final double canvasCenterY = (screenCenterY - ty) / scale;
+
+    return Offset(
+      canvasCenterX.clamp(120.0, _canvasWidth - 120.0),
+      canvasCenterY.clamp(120.0, _canvasHeight - 120.0),
+    );
+  }
+
   Offset _getNodeOffset(FocusNodeModel node, int index) {
     if (node.x != null && node.y != null) {
       return Offset(node.x!, node.y!);
@@ -120,6 +143,64 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
     return positions;
   }
 
+  /// 计算所有大节点外框在画布上的真实外接矩形
+  Map<String, Rect> _calculateAllGroupRects(Map<String, Offset> positions) {
+    final Map<String, Rect> rects = {};
+    for (final group in widget.engine.groups) {
+      final groupNodes = widget.engine.nodes
+          .where((n) => group.nodeIds.contains(n.id))
+          .toList();
+      if (groupNodes.isEmpty) continue;
+
+      double minX = double.infinity, maxX = -double.infinity;
+      double minY = double.infinity, maxY = -double.infinity;
+
+      for (final node in groupNodes) {
+        final pos = positions[node.id];
+        if (pos == null) continue;
+        final w = node.isPrompt ? _promptWidth : _normalWidth;
+        final h = node.isPrompt ? _promptHeight : _normalHeight;
+
+        final left = pos.dx - (w / 2);
+        final right = pos.dx + (w / 2);
+        final top = pos.dy - (h / 2);
+        final bottom = pos.dy + (h / 2);
+
+        if (left < minX) minX = left;
+        if (right > maxX) maxX = right;
+        if (top < minY) minY = top;
+        if (bottom > maxY) maxY = bottom;
+      }
+
+      const padH = 20.0;
+      const padTop = 38.0;
+      const padBottom = 16.0;
+
+      rects[group.id] = Rect.fromLTWH(
+        minX - padH,
+        minY - padTop,
+        (maxX - minX) + (padH * 2),
+        (maxY - minY) + padTop + padBottom,
+      );
+    }
+    return rects;
+  }
+
+  /// 计算射线从中心指向 target 时与矩形边框的精确交点
+  static Offset getRectPerimeterPoint(Rect rect, Offset target) {
+    final center = rect.center;
+    final dx = target.dx - center.dx;
+    final dy = target.dy - center.dy;
+    if (dx == 0 && dy == 0) return center;
+
+    final halfW = rect.width / 2;
+    final halfH = rect.height / 2;
+    final scaleX = dx == 0 ? double.infinity : (halfW / dx.abs());
+    final scaleY = dy == 0 ? double.infinity : (halfH / dy.abs());
+    final scale = math.min(scaleX, scaleY);
+    return center + Offset(dx * scale, dy * scale);
+  }
+
   void _onNodeTap(FocusNodeModel node) {
     if (widget.engine.isGroupSelectMode) {
       widget.engine.toggleNodeInGroupSelect(node.id);
@@ -132,7 +213,7 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('已选「${node.title}」，请点击另一个节点完成连接'),
+            content: Text('已选「${node.title}」，请点击另一个节点或大节点完成连接'),
             duration: const Duration(seconds: 2),
             behavior: SnackBarBehavior.floating,
           ),
@@ -149,19 +230,50 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
     widget.engine.selectNode(node.id);
   }
 
-  /// 连线碰撞检测：检测手指点击是否命中了贝塞尔曲线
-  FocusConnection? _hitTestConnection(Offset tapPos, Map<String, Offset> positions) {
+  void _onGroupTap(FocusGroupModel group) {
+    if (widget.isConnectMode) {
+      if (_connectStartId == null) {
+        setState(() => _connectStartId = group.id);
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('已选大节点「${group.title}」，请点击另一个节点或大节点完成连接'),
+            duration: const Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      } else if (_connectStartId == group.id) {
+        setState(() => _connectStartId = null);
+      } else {
+        widget.engine.addConnection(_connectStartId!, group.id);
+        setState(() => _connectStartId = null);
+      }
+    }
+  }
+
+  /// 连线碰撞检测（兼顾节点与大节点外框交点）
+  FocusConnection? _hitTestConnection(
+    Offset tapPos,
+    Map<String, Offset> positions,
+    Map<String, Rect> groupRects,
+  ) {
     const double hitRadiusSquared = 22.0 * 22.0;
 
     for (final conn in widget.engine.connections) {
-      final p1 = positions[conn.fromId];
-      final p2 = positions[conn.toId];
-      if (p1 == null || p2 == null) continue;
+      final centerA = groupRects[conn.fromId]?.center ?? positions[conn.fromId];
+      final centerB = groupRects[conn.toId]?.center ?? positions[conn.toId];
+      if (centerA == null || centerB == null) continue;
+
+      final p1 = groupRects.containsKey(conn.fromId)
+          ? getRectPerimeterPoint(groupRects[conn.fromId]!, centerB)
+          : centerA;
+      final p2 = groupRects.containsKey(conn.toId)
+          ? getRectPerimeterPoint(groupRects[conn.toId]!, centerA)
+          : centerB;
 
       final p1Ctrl = Offset(p1.dx, (p1.dy + p2.dy) / 2);
       final p2Ctrl = Offset(p2.dx, (p1.dy + p2.dy) / 2);
 
-      // 采样 25 个点计算与点击位置的距离
       for (int i = 0; i <= 24; i++) {
         final t = i / 24.0;
         final u = 1.0 - t;
@@ -202,16 +314,54 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
     });
   }
 
+  void _confirmDeleteGroup(FocusGroupModel group) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.surfaceWhite,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: const Text(
+          '确认解散大节点？',
+          style: TextStyle(
+            color: AppTheme.deepNavy,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        content: Text('将解散大节点「${group.title}」，框内包含的国策节点将保留。'),
+        actions: [
+          TextButton(
+            child: const Text('取消', style: TextStyle(color: Colors.black45)),
+            onPressed: () => Navigator.pop(ctx),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.redAccent,
+              foregroundColor: Colors.white,
+              elevation: 0,
+            ),
+            child: const Text('确认解散'),
+            onPressed: () {
+              widget.engine.deleteGroup(group.id);
+              Navigator.pop(ctx);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final nodes = widget.engine.nodes;
     final positions = _calculateAllPositions();
+    final groupRects = _calculateAllGroupRects(positions);
     final inGroupMode = widget.engine.isGroupSelectMode;
 
     return Container(
       color: AppTheme.bgCanvas,
       child: Stack(
         children: [
+          // 视口级动态无限点阵背景
           Positioned.fill(
             child: AnimatedBuilder(
               animation: _controller,
@@ -223,6 +373,7 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
             ),
           ),
 
+          // 画布交互层
           InteractiveViewer(
             transformationController: _controller,
             boundaryMargin: const EdgeInsets.all(4000),
@@ -236,9 +387,8 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
                 if (renderBox != null) {
                   final local = renderBox.globalToLocal(details.globalPosition);
 
-                  // 1. 如果点击了某条连接线：选中该连线
                   if (!widget.isConnectMode && !inGroupMode) {
-                    final hitConn = _hitTestConnection(local, positions);
+                    final hitConn = _hitTestConnection(local, positions, groupRects);
                     if (hitConn != null) {
                       HapticFeedback.selectionClick();
                       widget.engine.selectConnection(hitConn);
@@ -246,7 +396,6 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
                     }
                   }
 
-                  // 2. 点击空白处清除所有选中
                   if (widget.engine.selectedNodeId != null) {
                     widget.engine.selectNode(null);
                   }
@@ -308,12 +457,13 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
                 height: _canvasHeight,
                 child: Stack(
                   children: [
-                    // 1. 连线层（支持高亮选中连线）
+                    // 1. 连线层
                     Positioned.fill(
                       child: CustomPaint(
                         painter: _TreeConnectionPainter(
                           connections: widget.engine.connections,
                           positions: positions,
+                          groupRects: groupRects,
                           selectedConnection: widget.engine.selectedConnection,
                         ),
                       ),
@@ -321,7 +471,9 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
 
                     // 2. 大节点框层
                     ...widget.engine.groups.map((group) {
-                      return _buildGroupBoundingBox(group, positions);
+                      final rect = groupRects[group.id];
+                      if (rect == null) return const SizedBox.shrink();
+                      return _buildGroupBoundingBox(group, rect, positions);
                     }),
 
                     // 3. 拉框半透明视觉层
@@ -476,9 +628,13 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
                   elevation: 3,
                   tooltip: '添加国策节点',
                   onPressed: () {
+                    final center = _getViewportCenterInCanvas();
                     showDialog(
                       context: context,
-                      builder: (ctx) => AddNodeDialog(engine: widget.engine),
+                      builder: (ctx) => AddNodeDialog(
+                        engine: widget.engine,
+                        spawnPosition: center,
+                      ),
                     );
                   },
                   child: const Icon(Icons.add, size: 26),
@@ -513,52 +669,28 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
     );
   }
 
-  Widget _buildGroupBoundingBox(FocusGroupModel group, Map<String, Offset> positions) {
+  Widget _buildGroupBoundingBox(
+    FocusGroupModel group,
+    Rect rect,
+    Map<String, Offset> positions,
+  ) {
     final groupNodes = widget.engine.nodes
         .where((n) => group.nodeIds.contains(n.id))
         .toList();
 
-    if (groupNodes.isEmpty) return const SizedBox.shrink();
-
-    double minX = double.infinity, maxX = -double.infinity;
-    double minY = double.infinity, maxY = -double.infinity;
-
-    for (final node in groupNodes) {
-      final pos = positions[node.id];
-      if (pos == null) continue;
-      final w = node.isPrompt ? _promptWidth : _normalWidth;
-      final h = node.isPrompt ? _promptHeight : _normalHeight;
-
-      final left = pos.dx - (w / 2);
-      final right = pos.dx + (w / 2);
-      final top = pos.dy - (h / 2);
-      final bottom = pos.dy + (h / 2);
-
-      if (left < minX) minX = left;
-      if (right > maxX) maxX = right;
-      if (top < minY) minY = top;
-      if (bottom > maxY) maxY = bottom;
-    }
-
-    const padH = 20.0;
-    const padTop = 38.0;
-    const padBottom = 16.0;
-
-    final boxLeft = minX - padH;
-    final boxTop = minY - padTop;
-    final boxWidth = (maxX - minX) + (padH * 2);
-    final boxHeight = (maxY - minY) + padTop + padBottom;
-
     final totalProgress = groupNodes.fold<int>(0, (sum, n) => sum + n.progress);
     final progColor = ProgressColorHelper.getColor(totalProgress);
     final isGroupDragging = _draggingGroupId == group.id;
+    final isConnectSelected = group.id == _connectStartId;
 
     return Positioned(
-      left: boxLeft,
-      top: boxTop,
-      width: boxWidth,
-      height: boxHeight,
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
       child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => _onGroupTap(group),
         onLongPressStart: (details) {
           HapticFeedback.mediumImpact();
           final renderBox = _canvasKey.currentContext?.findRenderObject() as RenderBox?;
@@ -601,10 +733,10 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
                 : AppTheme.primaryBlue.withValues(alpha: 0.035),
             borderRadius: BorderRadius.circular(16),
             border: Border.all(
-              color: isGroupDragging
+              color: (isGroupDragging || isConnectSelected)
                   ? AppTheme.primaryBlue
                   : AppTheme.skyBlue.withValues(alpha: 0.55),
-              width: isGroupDragging ? 2.5 : 1.5,
+              width: (isGroupDragging || isConnectSelected) ? 2.5 : 1.5,
             ),
           ),
           child: Padding(
@@ -613,20 +745,13 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.drag_indicator_rounded, size: 14, color: AppTheme.primaryBlue),
-                    const SizedBox(width: 4),
-                    Text(
-                      group.title,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: AppTheme.deepNavy,
-                      ),
-                    ),
-                  ],
+                Text(
+                  group.title,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    color: AppTheme.deepNavy,
+                  ),
                 ),
                 Row(
                   mainAxisSize: MainAxisSize.min,
@@ -641,7 +766,7 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
                         ),
                       ),
                       child: Text(
-                        '总进度: ${totalProgress >= 0 ? "+$totalProgress" : totalProgress}',
+                        totalProgress >= 0 ? '+$totalProgress' : '$totalProgress',
                         style: TextStyle(
                           fontSize: 10,
                           fontWeight: FontWeight.w800,
@@ -651,9 +776,9 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
                     ),
                     const SizedBox(width: 6),
                     GestureDetector(
-                      onTap: () => widget.engine.deleteGroup(group.id),
+                      onTap: () => _confirmDeleteGroup(group),
                       child: Container(
-                        padding: const EdgeInsets.all(2),
+                        padding: const EdgeInsets.all(3),
                         decoration: BoxDecoration(
                           color: Colors.black.withValues(alpha: 0.06),
                           shape: BoxShape.circle,
@@ -776,7 +901,6 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
     );
   }
 
-  /// 提示块优化：无图标、字体放大至 13 且垂直水平完全居中
   Widget _buildPromptNodeCard(
     FocusNodeModel node,
     bool isSelectedSingle,
@@ -788,7 +912,7 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
     return Container(
       width: _promptWidth,
       height: _promptHeight,
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
         color: isHighlighted ? AppTheme.subtleFill : AppTheme.surfaceWhite,
         borderRadius: BorderRadius.circular(8),
@@ -808,7 +932,6 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
           ),
         ],
       ),
-      // 去掉图标，内容整体居中对齐
       child: Center(
         child: Text(
           node.content.isEmpty ? node.title : node.content,
@@ -816,10 +939,10 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
           textAlign: TextAlign.center,
           overflow: TextOverflow.ellipsis,
           style: const TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w700,
+            fontSize: 15,
+            fontWeight: FontWeight.w800,
             color: AppTheme.deepNavy,
-            height: 1.3,
+            height: 1.25,
           ),
         ),
       ),
@@ -872,50 +995,58 @@ class _InfiniteViewportGridPainter extends CustomPainter {
 class _TreeConnectionPainter extends CustomPainter {
   final Set<FocusConnection> connections;
   final Map<String, Offset> positions;
-  final FocusConnection? selectedConnection; // 选中高亮
+  final Map<String, Rect> groupRects;
+  final FocusConnection? selectedConnection;
 
   _TreeConnectionPainter({
     required this.connections,
     required this.positions,
+    required this.groupRects,
     this.selectedConnection,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
     for (final conn in connections) {
-      final p1 = positions[conn.fromId];
-      final p2 = positions[conn.toId];
-      if (p1 != null && p2 != null) {
-        final path = Path();
-        path.moveTo(p1.dx, p1.dy);
-        path.cubicTo(
-          p1.dx,
-          (p1.dy + p2.dy) / 2,
-          p2.dx,
-          (p1.dy + p2.dy) / 2,
-          p2.dx,
-          p2.dy,
-        );
+      final centerA = groupRects[conn.fromId]?.center ?? positions[conn.fromId];
+      final centerB = groupRects[conn.toId]?.center ?? positions[conn.toId];
+      if (centerA == null || centerB == null) continue;
 
-        final isSelected = conn == selectedConnection;
+      final p1 = groupRects.containsKey(conn.fromId)
+          ? NodeCanvasViewState.getRectPerimeterPoint(groupRects[conn.fromId]!, centerB)
+          : centerA;
+      final p2 = groupRects.containsKey(conn.toId)
+          ? NodeCanvasViewState.getRectPerimeterPoint(groupRects[conn.toId]!, centerA)
+          : centerB;
 
-        // 选中连线时光晕高亮效果
-        if (isSelected) {
-          final glowPaint = Paint()
-            ..color = AppTheme.primaryBlue.withValues(alpha: 0.28)
-            ..strokeWidth = 9.0
-            ..style = PaintingStyle.stroke
-            ..strokeCap = StrokeCap.round;
-          canvas.drawPath(path, glowPaint);
-        }
+      final path = Path();
+      path.moveTo(p1.dx, p1.dy);
+      path.cubicTo(
+        p1.dx,
+        (p1.dy + p2.dy) / 2,
+        p2.dx,
+        (p1.dy + p2.dy) / 2,
+        p2.dx,
+        p2.dy,
+      );
 
-        final linePaint = Paint()
-          ..color = isSelected ? AppTheme.primaryBlue : AppTheme.primaryBlue.withValues(alpha: 0.45)
-          ..strokeWidth = isSelected ? 3.0 : 2.0
-          ..style = PaintingStyle.stroke;
+      final isSelected = conn == selectedConnection;
 
-        canvas.drawPath(path, linePaint);
+      if (isSelected) {
+        final glowPaint = Paint()
+          ..color = AppTheme.primaryBlue.withValues(alpha: 0.28)
+          ..strokeWidth = 9.0
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round;
+        canvas.drawPath(path, glowPaint);
       }
+
+      final linePaint = Paint()
+        ..color = isSelected ? AppTheme.primaryBlue : AppTheme.primaryBlue.withValues(alpha: 0.45)
+        ..strokeWidth = isSelected ? 3.0 : 2.0
+        ..style = PaintingStyle.stroke;
+
+      canvas.drawPath(path, linePaint);
     }
   }
 

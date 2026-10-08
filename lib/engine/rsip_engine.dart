@@ -10,16 +10,10 @@ class RsipEngine extends ChangeNotifier {
   final List<ProgressRecord> _history = [];
 
   String? _selectedNodeId;
-  FocusConnection? _selectedConnection; // 当前选中的连线
+  FocusConnection? _selectedConnection;
 
   bool _isGroupSelectMode = false;
   final Set<String> _groupSelectedNodeIds = {};
-
-  bool _promptNoteOnIncrease = true;
-  bool _promptNoteOnDecrease = true;
-
-  bool get promptNoteOnIncrease => _promptNoteOnIncrease;
-  bool get promptNoteOnDecrease => _promptNoteOnDecrease;
 
   List<FocusNodeModel> get nodes => List.unmodifiable(_nodes);
   Set<FocusConnection> get connections => Set.unmodifiable(_connections);
@@ -45,23 +39,14 @@ class RsipEngine extends ChangeNotifier {
     _loadFromStorage();
   }
 
-  // ==========================================
-  // 本地持久化 (Local Storage)
-  // ==========================================
-
   static const String _keyNodes = 'rsip_nodes_data';
   static const String _keyConnections = 'rsip_connections_data';
   static const String _keyGroups = 'rsip_groups_data';
   static const String _keyHistory = 'rsip_history_data';
-  static const String _keyPromptInc = 'rsip_prompt_inc';
-  static const String _keyPromptDec = 'rsip_prompt_dec';
 
   Future<void> _loadFromStorage() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-
-      _promptNoteOnIncrease = prefs.getBool(_keyPromptInc) ?? true;
-      _promptNoteOnDecrease = prefs.getBool(_keyPromptDec) ?? true;
 
       final nodesJson = prefs.getString(_keyNodes);
       if (nodesJson != null) {
@@ -117,16 +102,10 @@ class RsipEngine extends ChangeNotifier {
         _keyHistory,
         jsonEncode(_history.map((h) => h.toJson()).toList()),
       );
-      await prefs.setBool(_keyPromptInc, _promptNoteOnIncrease);
-      await prefs.setBool(_keyPromptDec, _promptNoteOnDecrease);
     } catch (e) {
       debugPrint('保存到本地存储失败: $e');
     }
   }
-
-  // ==========================================
-  // 大节点框选管理
-  // ==========================================
 
   void startGroupSelectMode() {
     _isGroupSelectMode = true;
@@ -165,18 +144,19 @@ class RsipEngine extends ChangeNotifier {
 
   void deleteGroup(String groupId) {
     _groups.removeWhere((g) => g.id == groupId);
+    _connections.removeWhere((conn) => conn.fromId == groupId || conn.toId == groupId);
+    if (_selectedConnection != null &&
+        (_selectedConnection!.fromId == groupId || _selectedConnection!.toId == groupId)) {
+      _selectedConnection = null;
+    }
     notifyListeners();
     _saveToStorage();
   }
 
-  // ==========================================
-  // 连线管理
-  // ==========================================
-
   void selectConnection(FocusConnection? conn) {
     _selectedConnection = conn;
     if (conn != null) {
-      _selectedNodeId = null; // 选中连线时清除节点选中
+      _selectedNodeId = null;
     }
     notifyListeners();
   }
@@ -201,32 +181,12 @@ class RsipEngine extends ChangeNotifier {
     _saveToStorage();
   }
 
-  // ==========================================
-  // 设置管理
-  // ==========================================
-
-  void setPromptNoteOnIncrease(bool value) {
-    _promptNoteOnIncrease = value;
-    notifyListeners();
-    _saveToStorage();
-  }
-
-  void setPromptNoteOnDecrease(bool value) {
-    _promptNoteOnDecrease = value;
-    notifyListeners();
-    _saveToStorage();
-  }
-
-  // ==========================================
-  // 国策节点增删改查与打卡流水
-  // ==========================================
-
   void selectNode(String? id) {
     if (_selectedNodeId == id) {
       _selectedNodeId = null;
     } else {
       _selectedNodeId = id;
-      _selectedConnection = null; // 选中节点时清除选中的连线
+      _selectedConnection = null;
     }
     notifyListeners();
   }
@@ -241,20 +201,43 @@ class RsipEngine extends ChangeNotifier {
     }
   }
 
+ // 在 lib/engine/rsip_engine.dart 中更新 addNode 方法：
+
   void addNode({
     required String title,
     required String content,
     bool isPrompt = false,
+    bool promptNoteOnIncrease = true,
+    bool promptNoteOnDecrease = true,
     List<NumericAttribute>? numericAttributes,
+    double? x,
+    double? y,
   }) {
+    // 优先使用传入的屏幕中心坐标；若未传入则以现有节点的几何质心为准，避免不断下移
+    double targetX = x ?? 3000.0;
+    double targetY = y ?? 3000.0;
+
+    if (x == null && y == null && _nodes.isNotEmpty) {
+      double sumX = 0;
+      double sumY = 0;
+      for (final n in _nodes) {
+        sumX += (n.x ?? 3000.0);
+        sumY += (n.y ?? 3000.0);
+      }
+      targetX = sumX / _nodes.length;
+      targetY = sumY / _nodes.length;
+    }
+
     final newNode = FocusNodeModel(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       title: title,
       content: content,
       isPrompt: isPrompt,
+      promptNoteOnIncrease: promptNoteOnIncrease,
+      promptNoteOnDecrease: promptNoteOnDecrease,
       numericAttributes: numericAttributes,
-      x: 3000.0,
-      y: 3000.0 + (_nodes.length * 110.0),
+      x: targetX,
+      y: targetY,
     );
     _nodes.add(newNode);
     notifyListeners();
@@ -279,10 +262,13 @@ class RsipEngine extends ChangeNotifier {
     notifyListeners();
     _saveToStorage();
   }
-void updateNode(
+
+  void updateNode(
     String id,
     String newTitle,
     String newContent, {
+    bool? promptNoteOnIncrease,
+    bool? promptNoteOnDecrease,
     List<NumericAttribute>? numericAttributes,
     List<AttributeChange>? attributeChanges,
     bool recordToHistory = false,
@@ -291,9 +277,16 @@ void updateNode(
     final prevTitle = target.title;
     final prevContent = target.content;
 
+    // 独立更新备注开关（绝不写入版本历史）
+    if (promptNoteOnIncrease != null) {
+      target.promptNoteOnIncrease = promptNoteOnIncrease;
+    }
+    if (promptNoteOnDecrease != null) {
+      target.promptNoteOnDecrease = promptNoteOnDecrease;
+    }
+
     if (attributeChanges != null) {
       for (final change in attributeChanges) {
-        // 1. 属性更名：历史打卡记录中的属性键名自动平滑迁移，历史数据完全挂钩
         if (change.type == 0 &&
             change.oldName != null &&
             change.newName != null &&
@@ -306,9 +299,7 @@ void updateNode(
               }
             }
           }
-        }
-        // 2. 属性删除：级联彻底清理所有历史记录中绑定的该属性内容与数值
-        else if (change.type == -1 && change.oldName != null) {
+        } else if (change.type == -1 && change.oldName != null) {
           for (final record in _history) {
             if (record.nodeId == id && record.attributeDeltas != null) {
               record.attributeDeltas!.remove(change.oldName);
@@ -324,6 +315,7 @@ void updateNode(
       target.numericAttributes = List.from(numericAttributes);
     }
 
+    // 仅在有内容修改且用户确认时记录修订
     if (recordToHistory) {
       target.version += 1;
       _history.add(
@@ -395,12 +387,11 @@ void updateNode(
     _saveToStorage();
   }
 
-  /// 删除单条打卡记录并精确撤回关联的进度与属性累计
   void deleteRecord(String recordId) {
     final index = _history.indexWhere((r) => r.id == recordId);
     if (index == -1) return;
     final record = _history[index];
-    if (record.isEdit) return; // 版本修订记录不支持删除
+    if (record.isEdit) return;
 
     final nodeIndex = _nodes.indexWhere((n) => n.id == record.nodeId);
     if (nodeIndex != -1) {

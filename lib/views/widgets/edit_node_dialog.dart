@@ -21,6 +21,10 @@ class _EditNodeDialogState extends State<EditNodeDialog> {
   late final TextEditingController _titleController;
   late final TextEditingController _contentController;
 
+  // 左右长方形块控制开关（修改绝不计入版本历史）
+  late bool _promptNoteOnIncrease;
+  late bool _promptNoteOnDecrease;
+
   final List<String> _attrIds = [];
   final List<TextEditingController> _attrNameControllers = [];
   final List<TextEditingController> _attrUnitControllers = [];
@@ -30,6 +34,8 @@ class _EditNodeDialogState extends State<EditNodeDialog> {
     super.initState();
     _titleController = TextEditingController(text: widget.node.title);
     _contentController = TextEditingController(text: widget.node.content);
+    _promptNoteOnIncrease = widget.node.promptNoteOnIncrease;
+    _promptNoteOnDecrease = widget.node.promptNoteOnDecrease;
 
     for (final attr in widget.node.numericAttributes) {
       _attrIds.add(attr.id);
@@ -69,48 +75,54 @@ class _EditNodeDialogState extends State<EditNodeDialog> {
     });
   }
 
+  Widget _buildToggleBlock({
+    required String label,
+    required bool isSelected,
+    required Color activeColor,
+    required Color activeBg,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(vertical: 9),
+        decoration: BoxDecoration(
+          color: isSelected ? activeBg : AppTheme.bgCanvas,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: isSelected ? activeColor.withValues(alpha: 0.5) : AppTheme.borderLight,
+            width: isSelected ? 1.3 : 1.0,
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              isSelected ? Icons.check_circle_rounded : Icons.radio_button_unchecked_rounded,
+              size: 14,
+              color: isSelected ? activeColor : Colors.black26,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                color: isSelected ? activeColor : Colors.black54,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _handleSave() async {
     final title = _titleController.text.trim();
     final content = _contentController.text.trim();
     if (title.isEmpty) return;
-
-    final shouldRecord = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppTheme.surfaceWhite,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        title: const Text(
-          '保存确认',
-          style: TextStyle(
-            fontSize: 17,
-            fontWeight: FontWeight.w800,
-            color: AppTheme.deepNavy,
-          ),
-        ),
-        content: const Text(
-          '是否保存该次编辑到记录？',
-          style: TextStyle(fontSize: 14, color: Colors.black87),
-        ),
-        actions: [
-          TextButton(
-            child: const Text('仅修改不记录', style: TextStyle(color: Colors.black45)),
-            onPressed: () => Navigator.pop(ctx, false),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppTheme.primaryBlue,
-              foregroundColor: Colors.white,
-              elevation: 0,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            ),
-            child: const Text('确定'),
-            onPressed: () => Navigator.pop(ctx, true),
-          ),
-        ],
-      ),
-    );
-
-    if (shouldRecord == null || !mounted) return;
 
     final List<NumericAttribute> newAttrs = [];
     for (int i = 0; i < _attrNameControllers.length; i++) {
@@ -118,7 +130,6 @@ class _EditNodeDialogState extends State<EditNodeDialog> {
       final name = _attrNameControllers[i].text.trim();
       final unit = _attrUnitControllers[i].text.trim();
       if (name.isNotEmpty) {
-        // 根据 id 寻找原属性，更名或换单位依然继承原有的 totalValue 与 count
         final existingIdx =
             widget.node.numericAttributes.indexWhere((a) => a.id == id);
         double existingTotal = 0.0;
@@ -140,10 +151,7 @@ class _EditNodeDialogState extends State<EditNodeDialog> {
       }
     }
 
-    // 统计属性的增、删、改差异
     final List<AttributeChange> attrChanges = [];
-
-    // 1. 比对旧属性：检查被删除或被修改的属性
     for (final oldAttr in widget.node.numericAttributes) {
       final matchNew = newAttrs.where((a) => a.id == oldAttr.id).firstOrNull;
       if (matchNew == null) {
@@ -151,7 +159,7 @@ class _EditNodeDialogState extends State<EditNodeDialog> {
           AttributeChange(
             oldName: oldAttr.name,
             oldUnit: oldAttr.unit,
-            type: -1, // 被删除
+            type: -1,
           ),
         );
       } else if (matchNew.name != oldAttr.name || matchNew.unit != oldAttr.unit) {
@@ -161,13 +169,12 @@ class _EditNodeDialogState extends State<EditNodeDialog> {
             oldUnit: oldAttr.unit,
             newName: matchNew.name,
             newUnit: matchNew.unit,
-            type: 0, // 被修改
+            type: 0,
           ),
         );
       }
     }
 
-    // 2. 比对新属性：检查新增的属性
     for (final newAttr in newAttrs) {
       final matchOld =
           widget.node.numericAttributes.where((a) => a.id == newAttr.id).firstOrNull;
@@ -176,16 +183,63 @@ class _EditNodeDialogState extends State<EditNodeDialog> {
           AttributeChange(
             newName: newAttr.name,
             newUnit: newAttr.unit,
-            type: 1, // 新增
+            type: 1,
           ),
         );
       }
+    }
+
+    final bool hasContentChanged = title != widget.node.title ||
+        content != widget.node.content ||
+        attrChanges.isNotEmpty;
+
+    bool shouldRecord = false;
+    if (hasContentChanged) {
+      final result = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: AppTheme.surfaceWhite,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          title: const Text(
+            '保存确认',
+            style: TextStyle(
+              fontSize: 17,
+              fontWeight: FontWeight.w800,
+              color: AppTheme.deepNavy,
+            ),
+          ),
+          content: const Text(
+            '是否保存该次编辑到记录？',
+            style: TextStyle(fontSize: 14, color: Colors.black87),
+          ),
+          actions: [
+            TextButton(
+              child: const Text('仅修改不记录', style: TextStyle(color: Colors.black45)),
+              onPressed: () => Navigator.pop(ctx, false),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.primaryBlue,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              child: const Text('确定'),
+              onPressed: () => Navigator.pop(ctx, true),
+            ),
+          ],
+        ),
+      );
+      if (result == null || !mounted) return;
+      shouldRecord = result;
     }
 
     widget.engine.updateNode(
       widget.node.id,
       title,
       content,
+      promptNoteOnIncrease: _promptNoteOnIncrease,
+      promptNoteOnDecrease: _promptNoteOnDecrease,
       numericAttributes: newAttrs,
       attributeChanges: attrChanges,
       recordToHistory: shouldRecord,
@@ -239,8 +293,36 @@ class _EditNodeDialogState extends State<EditNodeDialog> {
                   ),
                 ),
               ),
+
+              // 横向一行左右两边的长方形块（不计入版本历史）
               if (!widget.node.isPrompt) ...[
-                const SizedBox(height: 16),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildToggleBlock(
+                        label: '增加备注',
+                        isSelected: _promptNoteOnIncrease,
+                        activeColor: Colors.green.shade700,
+                        activeBg: const Color(0xFFF2FBF4),
+                        onTap: () => setState(() => _promptNoteOnIncrease = !_promptNoteOnIncrease),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _buildToggleBlock(
+                        label: '减少备注',
+                        isSelected: _promptNoteOnDecrease,
+                        activeColor: Colors.red.shade700,
+                        activeBg: const Color(0xFFFDF3F3),
+                        onTap: () => setState(() => _promptNoteOnDecrease = !_promptNoteOnDecrease),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+
+                // 数字属性定义
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
