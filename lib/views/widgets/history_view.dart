@@ -15,7 +15,6 @@ class HistoryView extends StatefulWidget {
 }
 
 class _HistoryViewState extends State<HistoryView> {
-  // 单例左滑状态控制器：确保一次只能展开一个
   final ValueNotifier<String?> _openedRowNotifier = ValueNotifier(null);
 
   @override
@@ -73,7 +72,7 @@ class _HistoryViewState extends State<HistoryView> {
 
   @override
   Widget build(BuildContext context) {
-    // 历史界面过滤版本修订，仅显示日常打卡
+    // 1. 过滤掉版本修订记录
     final list = widget.engine.history.where((r) => !r.isEdit).toList();
 
     if (list.isEmpty) {
@@ -94,42 +93,72 @@ class _HistoryViewState extends State<HistoryView> {
       );
     }
 
+    // 2. 严格按日期从新到老（降序）排序
+    list.sort((a, b) => b.time.compareTo(a.time));
+
+    // 3. 聚合按日期分栏
+    final Map<String, List<ProgressRecord>> grouped = {};
+    for (final r in list) {
+      final dateKey = '${r.time.year}-${r.time.month.toString().padLeft(2, '0')}-${r.time.day.toString().padLeft(2, '0')}';
+      grouped.putIfAbsent(dateKey, () => []).add(r);
+    }
+
     return ListView(
-      // 与上部栏完全零间距
+      // 与顶部 AppBar 零间距
       padding: const EdgeInsets.only(top: 0, bottom: 24),
       children: [
-        Container(
-          decoration: const BoxDecoration(
-            border: Border(
-              bottom: BorderSide(color: AppTheme.borderLight),
-            ),
-          ),
-          child: Column(
-            children: [
-              for (int i = 0; i < list.length; i++) ...[
-                if (i > 0) const Divider(height: 1, thickness: 0.8, color: AppTheme.borderLight),
-                SwipeableRecordRow(
-                  recordId: list[i].id,
-                  enabled: true,
-                  openedRowNotifier: _openedRowNotifier,
-                  onDelete: () => _confirmDeleteRecord(context, list[i]),
-                  child: _buildSeamlessHistoryRow(list[i]),
+        for (final entry in grouped.entries) ...[
+          // 日期分栏标签栏
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            color: AppTheme.bgCanvas,
+            child: Row(
+              children: [
+                const Icon(Icons.calendar_today_rounded, size: 13, color: AppTheme.primaryBlue),
+                const SizedBox(width: 6),
+                Text(
+                  entry.key,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    color: AppTheme.deepNavy,
+                    letterSpacing: 0.5,
+                  ),
                 ),
               ],
-            ],
+            ),
           ),
-        ),
+          // 当日无缝记录容器
+          Container(
+            decoration: const BoxDecoration(
+              border: Border(
+                bottom: BorderSide(color: AppTheme.borderLight),
+              ),
+            ),
+            child: Column(
+              children: [
+                for (int i = 0; i < entry.value.length; i++) ...[
+                  if (i > 0) const Divider(height: 1, thickness: 0.8, color: AppTheme.borderLight),
+                  SwipeableRecordRow(
+                    recordId: entry.value[i].id,
+                    enabled: true,
+                    openedRowNotifier: _openedRowNotifier,
+                    onDelete: () => _confirmDeleteRecord(context, entry.value[i]),
+                    child: _buildSeamlessHistoryRow(entry.value[i]),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
       ],
     );
   }
 
   Widget _buildSeamlessHistoryRow(ProgressRecord record) {
     final isGain = record.delta > 0;
-    // 增加浅绿，减少浅红
     final rowBgColor = isGain ? const Color(0xFFF2FBF4) : const Color(0xFFFDF3F3);
-
-    final timeStr = '${record.time.month.toString().padLeft(2, '0')}-${record.time.day.toString().padLeft(2, '0')} '
-        '${record.time.hour.toString().padLeft(2, '0')}:${record.time.minute.toString().padLeft(2, '0')}';
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -152,13 +181,7 @@ class _HistoryViewState extends State<HistoryView> {
                   ),
                 ),
               ),
-              // 时间（无框）
-              Text(
-                timeStr,
-                style: const TextStyle(fontSize: 11, color: Colors.black45),
-              ),
-              const SizedBox(width: 10),
-              // 净值（无框）
+              // 右侧去掉了时间显示，直接展现当前净值
               Text(
                 '净值 ${record.resultProgress >= 0 ? "+${record.resultProgress}" : record.resultProgress}',
                 style: TextStyle(

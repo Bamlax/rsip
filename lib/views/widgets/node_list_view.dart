@@ -28,33 +28,38 @@ class NodeListView extends StatelessWidget {
               style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: AppTheme.deepNavy),
             ),
             const SizedBox(height: 4),
-            const Text('点击右下角按钮添加国策', style: TextStyle(fontSize: 12, color: Colors.black38)),
+            const Text('点击右下角按钮添加国策，长按可上下拖拽排序', style: TextStyle(fontSize: 12, color: Colors.black38)),
           ],
         ),
       );
     }
 
-    return ListView(
-      // 与上部栏及左右边缘零间距
+    // 支持长按拖拽排序的无缝列表
+    return ReorderableListView.builder(
       padding: const EdgeInsets.only(top: 0, bottom: 24),
-      children: [
-        Container(
+      itemCount: visibleNodes.length,
+      onReorder: (oldIndex, newIndex) => engine.reorderNodes(oldIndex, newIndex),
+      proxyDecorator: (child, index, animation) {
+        return Material(
+          elevation: 6,
+          color: AppTheme.surfaceWhite,
+          shadowColor: AppTheme.primaryBlue.withValues(alpha: 0.35),
+          child: child,
+        );
+      },
+      itemBuilder: (context, index) {
+        final node = visibleNodes[index];
+        return Container(
+          key: ValueKey(node.id),
           decoration: const BoxDecoration(
             color: AppTheme.surfaceWhite,
             border: Border(
-              bottom: BorderSide(color: AppTheme.borderLight),
+              bottom: BorderSide(color: AppTheme.borderLight, width: 0.8),
             ),
           ),
-          child: Column(
-            children: [
-              for (int i = 0; i < visibleNodes.length; i++) ...[
-                if (i > 0) const Divider(height: 1, thickness: 0.8, color: AppTheme.borderLight),
-                _buildSeamlessNodeRow(visibleNodes[i]),
-              ],
-            ],
-          ),
-        ),
-      ],
+          child: _buildSeamlessNodeRow(node),
+        );
+      },
     );
   }
 
@@ -116,6 +121,8 @@ class NodeListView extends StatelessWidget {
                         ),
                       ),
                     ),
+                    const SizedBox(width: 8),
+                    const Icon(Icons.drag_indicator_rounded, size: 18, color: Colors.black26),
                   ],
                 ),
               ],

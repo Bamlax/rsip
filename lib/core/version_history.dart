@@ -17,6 +17,15 @@ class VersionHistoryConfig {
 
   static const List<VersionRelease> releases = [
       VersionRelease(
+      version: '0.3.0',
+      releaseDate: '2026-10-11',
+      changeLogs: [
+        '新增：自由排序节点',
+        '优化：记录的时间选择方式',
+        '优化：历史界面UI',
+      ],
+    ),
+      VersionRelease(
       version: '0.2.0',
       releaseDate: '2026-10-08',
       changeLogs: [

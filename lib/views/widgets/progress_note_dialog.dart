@@ -5,8 +5,13 @@ import '../../models/focus_node_model.dart';
 class ProgressSubmitData {
   final String? note;
   final Map<String, double> attributeDeltas;
+  final DateTime date; // 用户选择的日期
 
-  ProgressSubmitData({this.note, required this.attributeDeltas});
+  ProgressSubmitData({
+    this.note,
+    required this.attributeDeltas,
+    required this.date,
+  });
 }
 
 class ProgressNoteDialog extends StatefulWidget {
@@ -28,6 +33,7 @@ class ProgressNoteDialog extends StatefulWidget {
 class _ProgressNoteDialogState extends State<ProgressNoteDialog> {
   final _noteController = TextEditingController();
   final Map<String, TextEditingController> _attrControllers = {};
+  DateTime _selectedDate = DateTime.now(); // 默认今天
 
   @override
   void initState() {
@@ -44,6 +50,36 @@ class _ProgressNoteDialogState extends State<ProgressNoteDialog> {
       c.dispose();
     }
     super.dispose();
+  }
+
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate,
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2100),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: AppTheme.primaryBlue,
+              onPrimary: Colors.white,
+              onSurface: AppTheme.deepNavy,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+    if (picked != null) {
+      setState(() {
+        _selectedDate = picked;
+      });
+    }
+  }
+
+  String _formatDate(DateTime d) {
+    return '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
   }
 
   @override
@@ -92,7 +128,42 @@ class _ProgressNoteDialogState extends State<ProgressNoteDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 1. 【内容/心得在数值上方】
+            // 1. 【新增：日期选择栏】
+            InkWell(
+              onTap: _pickDate,
+              borderRadius: BorderRadius.circular(8),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  color: AppTheme.bgCanvas,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: AppTheme.borderLight),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.calendar_today_rounded, size: 14, color: AppTheme.primaryBlue),
+                    const SizedBox(width: 8),
+                    const Text(
+                      '记录日期：',
+                      style: TextStyle(fontSize: 12, color: Colors.black54),
+                    ),
+                    Text(
+                      _formatDate(_selectedDate),
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                        color: AppTheme.deepNavy,
+                      ),
+                    ),
+                    const Spacer(),
+                    const Icon(Icons.edit_calendar_rounded, size: 16, color: Colors.black38),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+
+            // 2. 心得/反思内容输入框
             const Text(
               '写下心得或反思（可选）：',
               style: TextStyle(fontSize: 12, color: Colors.black45),
@@ -100,7 +171,7 @@ class _ProgressNoteDialogState extends State<ProgressNoteDialog> {
             const SizedBox(height: 8),
             TextField(
               controller: _noteController,
-              autofocus: true,
+              autofocus: false,
               maxLines: 3,
               decoration: InputDecoration(
                 hintText: isIncrease ? '例如：按时完成，状态良好...' : '例如：受到干扰导致中断...',
@@ -115,7 +186,7 @@ class _ProgressNoteDialogState extends State<ProgressNoteDialog> {
             ),
             const SizedBox(height: 14),
 
-            // 2. 【数值录入在下方】
+            // 3. 数字属性数值录入
             if (widget.attributes.isNotEmpty) ...[
               const Text(
                 '本次记录属性数值：',
@@ -187,6 +258,7 @@ class _ProgressNoteDialogState extends State<ProgressNoteDialog> {
               ProgressSubmitData(
                 note: _noteController.text.trim(),
                 attributeDeltas: deltas,
+                date: _selectedDate,
               ),
             );
           },

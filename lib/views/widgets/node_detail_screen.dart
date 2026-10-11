@@ -50,7 +50,10 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         title: const Text(
           '确认删除国策？',
-          style: TextStyle(color: AppTheme.deepNavy, fontWeight: FontWeight.bold),
+          style: TextStyle(
+            color: AppTheme.deepNavy,
+            fontWeight: FontWeight.bold,
+          ),
         ),
         content: Text('将彻底删除「${node.title}」及其全部历史打卡记录和关联连线。'),
         actions: [
@@ -84,7 +87,10 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         title: const Text(
           '确认删除此打卡记录？',
-          style: TextStyle(color: AppTheme.deepNavy, fontWeight: FontWeight.bold),
+          style: TextStyle(
+            color: AppTheme.deepNavy,
+            fontWeight: FontWeight.bold,
+          ),
         ),
         content: const Text('删除后将撤回该次打卡记录，并同步更新进度与属性统计。'),
         actions: [
@@ -128,8 +134,9 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
           );
         }
 
-        final nodeHistory =
-            widget.engine.history.where((r) => r.nodeId == node!.id).toList();
+        final nodeHistory = widget.engine.history
+            .where((r) => r.nodeId == node!.id)
+            .toList();
         final progColor = ProgressColorHelper.getColor(node.progress);
 
         return Scaffold(
@@ -148,7 +155,10 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
             ),
             actions: [
               IconButton(
-                icon: const Icon(Icons.edit_outlined, color: AppTheme.primaryBlue),
+                icon: const Icon(
+                  Icons.edit_outlined,
+                  color: AppTheme.primaryBlue,
+                ),
                 tooltip: '编辑国策',
                 onPressed: () => _openEditDialog(context, node!),
               ),
@@ -166,7 +176,10 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
             children: [
               // 1. 顶部大卡片：与上部栏零间距贴合
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 16,
+                ),
                 decoration: const BoxDecoration(
                   color: AppTheme.surfaceWhite,
                   border: Border(
@@ -194,7 +207,9 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
                       children: [
                         _buildMetricTile(
                           label: '净进度',
-                          value: node.progress >= 0 ? '+${node.progress}' : '${node.progress}',
+                          value: node.progress >= 0
+                              ? '+${node.progress}'
+                              : '${node.progress}',
                           valColor: progColor,
                         ),
                         const SizedBox(width: 8),
@@ -216,7 +231,11 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
                       const SizedBox(height: 14),
                       const Text(
                         '属性数据累计与单次均值',
-                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.deepNavy),
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: AppTheme.deepNavy,
+                        ),
                       ),
                       const SizedBox(height: 8),
                       ...node.numericAttributes.map((attr) {
@@ -227,12 +246,18 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
                             children: [
                               Text(
                                 '${attr.name} (${attr.count}次记录)',
-                                style: const TextStyle(fontSize: 12, color: Colors.black87),
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.black87,
+                                ),
                               ),
                               Row(
                                 children: [
                                   Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 6,
+                                      vertical: 2,
+                                    ),
                                     decoration: BoxDecoration(
                                       color: AppTheme.bgCanvas,
                                       borderRadius: BorderRadius.circular(4),
@@ -248,7 +273,10 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
                                   ),
                                   const SizedBox(width: 6),
                                   Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 6,
+                                      vertical: 2,
+                                    ),
                                     decoration: BoxDecoration(
                                       color: AppTheme.bgCanvas,
                                       borderRadius: BorderRadius.circular(4),
@@ -294,7 +322,10 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
                 Container(
                   padding: const EdgeInsets.symmetric(vertical: 36),
                   alignment: Alignment.center,
-                  child: const Text('暂无详情变动明细', style: TextStyle(color: Colors.black38, fontSize: 13)),
+                  child: const Text(
+                    '暂无详情变动明细',
+                    style: TextStyle(color: Colors.black38, fontSize: 13),
+                  ),
                 )
               else
                 Container(
@@ -306,13 +337,19 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
                   child: Column(
                     children: [
                       for (int i = 0; i < nodeHistory.length; i++) ...[
-                        if (i > 0) const Divider(height: 1, thickness: 0.8, color: AppTheme.borderLight),
+                        if (i > 0)
+                          const Divider(
+                            height: 1,
+                            thickness: 0.8,
+                            color: AppTheme.borderLight,
+                          ),
                         SwipeableRecordRow(
                           recordId: nodeHistory[i].id,
                           // 版本修订不可左滑，普通打卡记录可左滑
                           enabled: !nodeHistory[i].isEdit,
                           openedRowNotifier: _openedRowNotifier,
-                          onDelete: () => _confirmDeleteRecord(context, nodeHistory[i]),
+                          onDelete: () =>
+                              _confirmDeleteRecord(context, nodeHistory[i]),
                           child: _buildSeamlessHistoryRow(nodeHistory[i], node),
                         ),
                       ],
@@ -340,7 +377,10 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
         ),
         child: Column(
           children: [
-            Text(label, style: const TextStyle(fontSize: 11, color: Colors.black54)),
+            Text(
+              label,
+              style: const TextStyle(fontSize: 11, color: Colors.black54),
+            ),
             const SizedBox(height: 2),
             Text(
               value,
@@ -363,8 +403,8 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
         ? const Color(0xFFF0F7FF)
         : (isGain ? const Color(0xFFF2FBF4) : const Color(0xFFFDF3F3));
 
-    final timeStr = '${record.time.month.toString().padLeft(2, '0')}-${record.time.day.toString().padLeft(2, '0')} '
-        '${record.time.hour.toString().padLeft(2, '0')}:${record.time.minute.toString().padLeft(2, '0')}';
+    final timeStr =
+        '${record.time.year}-${record.time.month.toString().padLeft(2, '0')}-${record.time.day.toString().padLeft(2, '0')}';
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -388,7 +428,10 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
                 const SizedBox(width: 8),
               ],
               Expanded(
-                child: record.isEdit && record.oldTitle != null && record.oldTitle != record.newTitle
+                child:
+                    record.isEdit &&
+                        record.oldTitle != null &&
+                        record.oldTitle != record.newTitle
                     ? RichText(
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -403,7 +446,11 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
                         record.nodeTitle,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: AppTheme.deepNavy),
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                          color: AppTheme.deepNavy,
+                        ),
                       ),
               ),
               // 时间（无框）
@@ -420,14 +467,17 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w800,
-                  color: record.isEdit ? AppTheme.primaryBlue : ProgressColorHelper.getColor(record.resultProgress),
+                  color: record.isEdit
+                      ? AppTheme.primaryBlue
+                      : ProgressColorHelper.getColor(record.resultProgress),
                 ),
               ),
             ],
           ),
 
           // 1. 内容修改差异比对（删除的内容删除线划掉）
-          if (record.isEdit && (record.oldContent != null || record.newContent != null)) ...[
+          if (record.isEdit &&
+              (record.oldContent != null || record.newContent != null)) ...[
             const SizedBox(height: 8),
             Container(
               width: double.infinity,
@@ -457,7 +507,10 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
                 // 删除属性：用红删除线划掉
                 return Container(
                   margin: const EdgeInsets.only(top: 4),
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 5,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.white.withValues(alpha: 0.7),
                     borderRadius: BorderRadius.circular(4),
@@ -488,7 +541,10 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
                 // 修改属性：原名字/单位划掉 ➔ 新名字/单位
                 return Container(
                   margin: const EdgeInsets.only(top: 4),
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 5,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.white.withValues(alpha: 0.7),
                     borderRadius: BorderRadius.circular(4),
@@ -530,7 +586,10 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
                 // 新增属性
                 return Container(
                   margin: const EdgeInsets.only(top: 4),
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 5,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.white.withValues(alpha: 0.7),
                     borderRadius: BorderRadius.circular(4),
@@ -559,7 +618,9 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
           ],
 
           // 常规打卡备注
-          if (!record.isEdit && record.note != null && record.note!.isNotEmpty) ...[
+          if (!record.isEdit &&
+              record.note != null &&
+              record.note!.isNotEmpty) ...[
             const SizedBox(height: 8),
             Container(
               width: double.infinity,
@@ -580,7 +641,8 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
           ],
 
           // 数值属性
-          if (record.attributeDeltas != null && record.attributeDeltas!.isNotEmpty) ...[
+          if (record.attributeDeltas != null &&
+              record.attributeDeltas!.isNotEmpty) ...[
             const SizedBox(height: 8),
             Wrap(
               spacing: 6,
@@ -588,11 +650,16 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
               children: record.attributeDeltas!.entries.map((entry) {
                 String unit = '';
                 try {
-                  unit = node.numericAttributes.firstWhere((a) => a.name == entry.key).unit;
+                  unit = node.numericAttributes
+                      .firstWhere((a) => a.name == entry.key)
+                      .unit;
                 } catch (_) {}
 
                 return Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 7,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.white.withValues(alpha: 0.7),
                     borderRadius: BorderRadius.circular(4),

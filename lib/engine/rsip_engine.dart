@@ -346,6 +346,7 @@ class RsipEngine extends ChangeNotifier {
     int delta, {
     String? note,
     Map<String, double>? attributeDeltas,
+    DateTime? recordDate, // 支持传入用户选择的记录日期
   }) {
     final target = _nodes.firstWhere((n) => n.id == id);
     if (target.isPrompt) return;
@@ -380,7 +381,7 @@ class RsipEngine extends ChangeNotifier {
         resultProgress: target.progress,
         note: (note != null && note.trim().isNotEmpty) ? note.trim() : null,
         attributeDeltas: attributeDeltas,
-        time: DateTime.now(),
+        time: recordDate ?? DateTime.now(), // 存储选择的日期
       ),
     );
     notifyListeners();
@@ -429,6 +430,28 @@ class RsipEngine extends ChangeNotifier {
     }
 
     _history.removeAt(index);
+    notifyListeners();
+    _saveToStorage();
+  }
+
+  void reorderNodes(int oldIndex, int newIndex) {
+    final visible = _nodes.where((n) => !n.isPrompt).toList();
+    if (oldIndex < 0 || oldIndex >= visible.length) return;
+
+    if (oldIndex < newIndex) {
+      newIndex -= 1;
+    }
+    final movedItem = visible.removeAt(oldIndex);
+    visible.insert(newIndex, movedItem);
+
+    // 依序填回 _nodes 中（保持提示节点位置不受影响）
+    int vIdx = 0;
+    for (int i = 0; i < _nodes.length; i++) {
+      if (!_nodes[i].isPrompt) {
+        _nodes[i] = visible[vIdx++];
+      }
+    }
+
     notifyListeners();
     _saveToStorage();
   }

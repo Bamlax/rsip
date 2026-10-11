@@ -512,7 +512,6 @@ class _MainScreenState extends State<MainScreen> {
 // 在 lib/views/main_screen.dart 的 _handleProgressChange 方法中：
 
   Future<void> _handleProgressChange(FocusNodeModel node, int delta) async {
-    // 读取当前节点自定义的备注开关
     final shouldPrompt = delta > 0
         ? node.promptNoteOnIncrease
         : node.promptNoteOnDecrease;
@@ -533,6 +532,7 @@ class _MainScreenState extends State<MainScreen> {
           delta,
           note: result.note,
           attributeDeltas: result.attributeDeltas,
+          recordDate: result.date, // 传入选中的日期
         );
       }
     } else {
