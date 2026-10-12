@@ -511,7 +511,7 @@ class _MainScreenState extends State<MainScreen> {
   }
 // 在 lib/views/main_screen.dart 的 _handleProgressChange 方法中：
 
-  Future<void> _handleProgressChange(FocusNodeModel node, int delta) async {
+Future<void> _handleProgressChange(FocusNodeModel node, int delta) async {
     final shouldPrompt = delta > 0
         ? node.promptNoteOnIncrease
         : node.promptNoteOnDecrease;
@@ -523,6 +523,7 @@ class _MainScreenState extends State<MainScreen> {
           nodeTitle: node.title,
           delta: delta,
           attributes: node.numericAttributes,
+          engine: widget.engine, // 传入 engine 用于获取历史标签
         ),
       );
       if (result == null && !mounted) return;
@@ -531,8 +532,9 @@ class _MainScreenState extends State<MainScreen> {
           node.id,
           delta,
           note: result.note,
+          tags: result.tags, // 传入选中的标签
           attributeDeltas: result.attributeDeltas,
-          recordDate: result.date, // 传入选中的日期
+          recordDate: result.date,
         );
       }
     } else {

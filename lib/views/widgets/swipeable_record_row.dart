@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import '../../core/app_theme.dart';
 
 class SwipeableRecordRow extends StatefulWidget {
   final String recordId;
-  final bool enabled; // 为 false 时（如版本修订）彻底禁用左滑
+  final bool enabled;
   final Widget child;
+  final VoidCallback onEdit;
   final VoidCallback onDelete;
   final ValueNotifier<String?> openedRowNotifier;
 
@@ -12,6 +14,7 @@ class SwipeableRecordRow extends StatefulWidget {
     required this.recordId,
     required this.enabled,
     required this.child,
+    required this.onEdit,
     required this.onDelete,
     required this.openedRowNotifier,
   });
@@ -23,7 +26,9 @@ class SwipeableRecordRow extends StatefulWidget {
 class _SwipeableRecordRowState extends State<SwipeableRecordRow>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
-  static const double _actionWidth = 74.0;
+  // 两个按钮的总宽度
+  static const double _btnWidth = 64.0;
+  static const double _totalActionWidth = _btnWidth * 2;
   double _dragOffset = 0.0;
 
   @override
@@ -35,14 +40,13 @@ class _SwipeableRecordRowState extends State<SwipeableRecordRow>
     );
     _controller.addListener(() {
       setState(() {
-        _dragOffset = _controller.value * _actionWidth;
+        _dragOffset = _controller.value * _totalActionWidth;
       });
     });
     widget.openedRowNotifier.addListener(_onOpenedRowChanged);
   }
 
   void _onOpenedRowChanged() {
-    // 监听互斥事件：一旦其它条目被滑动，自身自动平滑关闭
     if (widget.openedRowNotifier.value != widget.recordId && _dragOffset > 0) {
       _controller.reverse();
     }
@@ -81,12 +85,12 @@ class _SwipeableRecordRowState extends State<SwipeableRecordRow>
       },
       onHorizontalDragUpdate: (details) {
         setState(() {
-          _dragOffset = (_dragOffset - details.primaryDelta!).clamp(0.0, _actionWidth);
-          _controller.value = _dragOffset / _actionWidth;
+          _dragOffset = (_dragOffset - details.primaryDelta!).clamp(0.0, _totalActionWidth);
+          _controller.value = _dragOffset / _totalActionWidth;
         });
       },
       onHorizontalDragEnd: (_) {
-        if (_dragOffset > _actionWidth / 2) {
+        if (_dragOffset > _totalActionWidth / 2) {
           _open();
         } else {
           _close();
@@ -94,30 +98,52 @@ class _SwipeableRecordRowState extends State<SwipeableRecordRow>
       },
       child: Stack(
         children: [
-          // 底层红色删除区域
+          // 底层：[编辑 (蓝色)] [删除 (红色)]
           Positioned.fill(
-            child: Container(
-              alignment: Alignment.centerRight,
-              color: Colors.redAccent,
-              child: SizedBox(
-                width: _actionWidth,
-                child: Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    onTap: () {
-                      _close();
-                      widget.onDelete();
-                    },
-                    child: const Center(
-                      child: Icon(
-                        Icons.delete_outline,
-                        color: Colors.white,
-                        size: 22,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                // 编辑按钮 (在删除左边)
+                SizedBox(
+                  width: _btnWidth,
+                  child: Material(
+                    color: AppTheme.primaryBlue,
+                    child: InkWell(
+                      onTap: () {
+                        _close();
+                        widget.onEdit();
+                      },
+                      child: const Center(
+                        child: Icon(
+                          Icons.edit_outlined,
+                          color: Colors.white,
+                          size: 20,
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ),
+                // 删除按钮
+                SizedBox(
+                  width: _btnWidth,
+                  child: Material(
+                    color: Colors.redAccent,
+                    child: InkWell(
+                      onTap: () {
+                        _close();
+                        widget.onDelete();
+                      },
+                      child: const Center(
+                        child: Icon(
+                          Icons.delete_outline,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
           // 表层内容平移

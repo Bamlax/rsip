@@ -3,6 +3,7 @@ import '../../core/app_theme.dart';
 import '../../core/progress_color_helper.dart';
 import '../../engine/rsip_engine.dart';
 import '../../models/focus_node_model.dart';
+import 'edit_record_dialog.dart';
 import 'swipeable_record_row.dart';
 
 class HistoryView extends StatefulWidget {
@@ -15,6 +16,7 @@ class HistoryView extends StatefulWidget {
 }
 
 class _HistoryViewState extends State<HistoryView> {
+  // 单例互斥滑动控制器：全屏仅允许一个条目处于展开状态
   final ValueNotifier<String?> _openedRowNotifier = ValueNotifier(null);
 
   @override
@@ -35,6 +37,13 @@ class _HistoryViewState extends State<HistoryView> {
     } catch (_) {
       return '';
     }
+  }
+
+  void _openEditRecord(BuildContext context, ProgressRecord record) {
+    showDialog(
+      context: context,
+      builder: (ctx) => EditRecordDialog(record: record, engine: widget.engine),
+    );
   }
 
   void _confirmDeleteRecord(BuildContext context, ProgressRecord record) {
@@ -72,7 +81,7 @@ class _HistoryViewState extends State<HistoryView> {
 
   @override
   Widget build(BuildContext context) {
-    // 1. 过滤掉版本修订记录
+    // 过滤掉版本修订记录，仅展示日常打卡记录
     final list = widget.engine.history.where((r) => !r.isEdit).toList();
 
     if (list.isEmpty) {
@@ -87,24 +96,24 @@ class _HistoryViewState extends State<HistoryView> {
               style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: AppTheme.deepNavy),
             ),
             const SizedBox(height: 4),
-            const Text('在列表或树中打卡即可沉淀记录，支持左滑删除', style: TextStyle(fontSize: 12, color: Colors.black38)),
+            const Text('在列表或树中打卡即可沉淀记录，支持左滑编辑与删除', style: TextStyle(fontSize: 12, color: Colors.black38)),
           ],
         ),
       );
     }
 
-    // 2. 严格按日期从新到老（降序）排序
+    // 严格按时间降序（最新在上）
     list.sort((a, b) => b.time.compareTo(a.time));
 
-    // 3. 聚合按日期分栏
+    // 根据跨天延后规则按归属日期分组
     final Map<String, List<ProgressRecord>> grouped = {};
     for (final r in list) {
-      final dateKey = '${r.time.year}-${r.time.month.toString().padLeft(2, '0')}-${r.time.day.toString().padLeft(2, '0')}';
+      final dateKey = widget.engine.formatRecordDate(r.time);
       grouped.putIfAbsent(dateKey, () => []).add(r);
     }
 
     return ListView(
-      // 与顶部 AppBar 零间距
+      // 与上部 AppBar 零间距贴合
       padding: const EdgeInsets.only(top: 0, bottom: 24),
       children: [
         for (final entry in grouped.entries) ...[
@@ -144,6 +153,7 @@ class _HistoryViewState extends State<HistoryView> {
                     recordId: entry.value[i].id,
                     enabled: true,
                     openedRowNotifier: _openedRowNotifier,
+                    onEdit: () => _openEditRecord(context, entry.value[i]),
                     onDelete: () => _confirmDeleteRecord(context, entry.value[i]),
                     child: _buildSeamlessHistoryRow(entry.value[i]),
                   ),
@@ -209,6 +219,34 @@ class _HistoryViewState extends State<HistoryView> {
                   height: 1.35,
                 ),
               ),
+            ),
+          ],
+          if (record.tags != null && record.tags!.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              children: record.tags!.map((tag) {
+                return Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.7),
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(
+                      color: isGain ? Colors.green.shade200 : Colors.red.shade200,
+                      width: 0.8,
+                    ),
+                  ),
+                  child: Text(
+                    '#$tag',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      color: isGain ? Colors.green.shade800 : Colors.red.shade800,
+                    ),
+                  ),
+                );
+              }).toList(),
             ),
           ],
           if (record.attributeDeltas != null && record.attributeDeltas!.isNotEmpty) ...[

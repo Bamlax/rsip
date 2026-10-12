@@ -1,33 +1,65 @@
 import 'package:flutter/material.dart';
-import 'app_theme.dart';
 
 class ProgressColorHelper {
-  /// 主题主色（边框与文字）
+  /// 进度主色调：从清透明快的浅绿 (#22C55E / #16A34A) 平滑过渡至沉稳墨绿 (#064E3B)
   static Color getColor(int progress) {
     if (progress > 0) {
-      if (progress >= 7) return const Color(0xFF1B5E20); // 深浓绿
-      if (progress >= 4) return const Color(0xFF2E7D32); // 森林绿
-      if (progress >= 2) return const Color(0xFF388E3C); // 翠绿
-      return const Color(0xFF4CAF50);                     // 青绿
+      final ratio = ((progress - 1) / 14.0).clamp(0.0, 1.0);
+      return Color.lerp(
+        const Color(0xFF22C55E), // 浅绿
+        const Color(0xFF064E3B), // 深绿
+        ratio,
+      )!;
     } else if (progress < 0) {
-      final abs = progress.abs();
-      if (abs >= 7) return const Color(0xFFB71C1C);     // 深浓红
-      if (abs >= 4) return const Color(0xFFC62828);     // 猩红
-      if (abs >= 2) return const Color(0xFFD32F2F);     // 亮红
-      return const Color(0xFFE53935);                     // 桃粉红
+      final ratio = (((-progress) - 1) / 14.0).clamp(0.0, 1.0);
+      return Color.lerp(
+        const Color(0xFFF87171), // 浅红
+        const Color(0xFF7F1D1D), // 深红
+        ratio,
+      )!;
     }
-    return AppTheme.primaryBlue; // 0 为中性经典蓝
+    return const Color(0xFF64748B);
   }
 
-  /// 浅色底衬背景色
+  /// 进度背景底色：从淡透浅绿 (#F0FDF4) 随进度加深过渡至浅嫩草绿 (#BBF7D0)
   static Color getBgColor(int progress) {
     if (progress > 0) {
-      final alpha = (0.05 + (progress * 0.02)).clamp(0.05, 0.22);
-      return Colors.green.withValues(alpha: alpha);
+      final ratio = ((progress - 1) / 14.0).clamp(0.0, 1.0);
+      return Color.lerp(
+        const Color(0xFFF0FDF4), // 极淡浅绿
+        const Color(0xFFBBF7D0), // 稍深浅绿底色
+        ratio,
+      )!;
     } else if (progress < 0) {
-      final alpha = (0.05 + (progress.abs() * 0.02)).clamp(0.05, 0.22);
-      return Colors.red.withValues(alpha: alpha);
+      final ratio = (((-progress) - 1) / 14.0).clamp(0.0, 1.0);
+      return Color.lerp(
+        const Color(0xFFFEF2F2),
+        const Color(0xFFFECACA),
+        ratio,
+      )!;
     }
-    return AppTheme.surfaceWhite;
+    return Colors.white;
+  }
+
+  /// 增加次数徽章文字色：从鲜明浅绿过渡到深邃墨绿
+  static Color getIncreaseColor(int count) {
+    if (count <= 0) return const Color(0xFF22C55E);
+    final ratio = ((count - 1) / 19.0).clamp(0.0, 1.0);
+    return Color.lerp(
+      const Color(0xFF22C55E), // 浅绿
+      const Color(0xFF064E3B), // 深绿
+      ratio,
+    )!;
+  }
+
+  /// 增加次数徽章背景色：从极浅绿到淡绿底
+  static Color getIncreaseBgColor(int count) {
+    if (count <= 0) return const Color(0xFFF0FDF4);
+    final ratio = ((count - 1) / 19.0).clamp(0.0, 1.0);
+    return Color.lerp(
+      const Color(0xFFF0FDF4),
+      const Color(0xFFBBF7D0),
+      ratio,
+    )!;
   }
 }

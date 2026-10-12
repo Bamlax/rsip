@@ -225,6 +225,7 @@ class ProgressRecord {
   final int delta;
   final int resultProgress;
   final String? note;
+  final List<String>? tags; // 新增：标签列表
   final Map<String, double>? attributeDeltas;
   final int? revision;
   final bool isEdit;
@@ -242,6 +243,7 @@ class ProgressRecord {
     required this.delta,
     required this.resultProgress,
     this.note,
+    this.tags,
     this.attributeDeltas,
     this.revision,
     this.isEdit = false,
@@ -260,6 +262,7 @@ class ProgressRecord {
         'delta': delta,
         'resultProgress': resultProgress,
         'note': note,
+        'tags': tags,
         'attributeDeltas': attributeDeltas,
         'revision': revision,
         'isEdit': isEdit,
@@ -279,6 +282,7 @@ class ProgressRecord {
         delta: json['delta'] as int? ?? 0,
         resultProgress: json['resultProgress'] as int? ?? 0,
         note: json['note'] as String?,
+        tags: (json['tags'] as List<dynamic>?)?.map((e) => e.toString()).toList(),
         attributeDeltas: json['attributeDeltas'] != null
             ? (json['attributeDeltas'] as Map<String, dynamic>).map(
                 (k, v) => MapEntry(k, (v as num).toDouble()),

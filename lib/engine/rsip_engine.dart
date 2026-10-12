@@ -15,6 +15,10 @@ class RsipEngine extends ChangeNotifier {
   bool _isGroupSelectMode = false;
   final Set<String> _groupSelectedNodeIds = {};
 
+  // 跨天延后小时数 (0 ~ 12，例如设为 3，则凌晨 3:00 前的记录仍算在前一天)
+  int _dayStartHourOffset = 0;
+
+  int get dayStartHourOffset => _dayStartHourOffset;
   List<FocusNodeModel> get nodes => List.unmodifiable(_nodes);
   Set<FocusConnection> get connections => Set.unmodifiable(_connections);
   List<FocusGroupModel> get groups => List.unmodifiable(_groups);
@@ -31,7 +35,6 @@ class RsipEngine extends ChangeNotifier {
   }
 
   FocusConnection? get selectedConnection => _selectedConnection;
-
   bool get isGroupSelectMode => _isGroupSelectMode;
   Set<String> get groupSelectedNodeIds => Set.unmodifiable(_groupSelectedNodeIds);
 
@@ -39,14 +42,21 @@ class RsipEngine extends ChangeNotifier {
     _loadFromStorage();
   }
 
+  // ==========================================
+  // 本地持久化 (Storage)
+  // ==========================================
+
   static const String _keyNodes = 'rsip_nodes_data';
   static const String _keyConnections = 'rsip_connections_data';
   static const String _keyGroups = 'rsip_groups_data';
   static const String _keyHistory = 'rsip_history_data';
+  static const String _keyDayOffset = 'rsip_day_start_hour_offset';
 
   Future<void> _loadFromStorage() async {
     try {
       final prefs = await SharedPreferences.getInstance();
+
+      _dayStartHourOffset = prefs.getInt(_keyDayOffset) ?? 0;
 
       final nodesJson = prefs.getString(_keyNodes);
       if (nodesJson != null) {
@@ -102,10 +112,79 @@ class RsipEngine extends ChangeNotifier {
         _keyHistory,
         jsonEncode(_history.map((h) => h.toJson()).toList()),
       );
+      await prefs.setInt(_keyDayOffset, _dayStartHourOffset);
     } catch (e) {
       debugPrint('保存到本地存储失败: $e');
     }
   }
+
+  // ==========================================
+  // 日期归属与延后计算
+  // ==========================================
+
+  void setDayStartHourOffset(int hours) {
+    _dayStartHourOffset = hours.clamp(0, 12);
+    notifyListeners();
+    _saveToStorage();
+  }
+
+  /// 计算归属日期（根据延后小时偏移计算）
+  DateTime getEffectiveDate(DateTime dt) {
+    final adjusted = dt.subtract(Duration(hours: _dayStartHourOffset));
+    return DateTime(adjusted.year, adjusted.month, adjusted.day);
+  }
+
+  /// 格式化为归属日期的 YYYY-MM-DD
+  String formatRecordDate(DateTime dt) {
+    final d = getEffectiveDate(dt);
+    return '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+  }
+
+  // ==========================================
+  // 标签管理 (增加与减少隔离)
+  // ==========================================
+
+  /// 获取历史打卡使用过的标签列表
+  List<String> getHistoricalTags({required bool isIncrease}) {
+    final Set<String> tagSet = {};
+    for (final record in _history) {
+      if (record.isEdit) continue;
+      final match = isIncrease ? record.delta > 0 : record.delta < 0;
+      if (match && record.tags != null) {
+        tagSet.addAll(record.tags!);
+      }
+    }
+    return tagSet.toList();
+  }
+
+  // ==========================================
+  // 节点拖拽排序
+  // ==========================================
+
+  void reorderNodes(int oldIndex, int newIndex) {
+    final visible = _nodes.where((n) => !n.isPrompt).toList();
+    if (oldIndex < 0 || oldIndex >= visible.length) return;
+
+    if (oldIndex < newIndex) {
+      newIndex -= 1;
+    }
+    final movedItem = visible.removeAt(oldIndex);
+    visible.insert(newIndex, movedItem);
+
+    int vIdx = 0;
+    for (int i = 0; i < _nodes.length; i++) {
+      if (!_nodes[i].isPrompt) {
+        _nodes[i] = visible[vIdx++];
+      }
+    }
+
+    notifyListeners();
+    _saveToStorage();
+  }
+
+  // ==========================================
+  // 大节点管理
+  // ==========================================
 
   void startGroupSelectMode() {
     _isGroupSelectMode = true;
@@ -153,6 +232,10 @@ class RsipEngine extends ChangeNotifier {
     _saveToStorage();
   }
 
+  // ==========================================
+  // 连线管理
+  // ==========================================
+
   void selectConnection(FocusConnection? conn) {
     _selectedConnection = conn;
     if (conn != null) {
@@ -181,6 +264,10 @@ class RsipEngine extends ChangeNotifier {
     _saveToStorage();
   }
 
+  // ==========================================
+  // 国策节点增删改查
+  // ==========================================
+
   void selectNode(String? id) {
     if (_selectedNodeId == id) {
       _selectedNodeId = null;
@@ -201,8 +288,6 @@ class RsipEngine extends ChangeNotifier {
     }
   }
 
- // 在 lib/engine/rsip_engine.dart 中更新 addNode 方法：
-
   void addNode({
     required String title,
     required String content,
@@ -213,7 +298,6 @@ class RsipEngine extends ChangeNotifier {
     double? x,
     double? y,
   }) {
-    // 优先使用传入的屏幕中心坐标；若未传入则以现有节点的几何质心为准，避免不断下移
     double targetX = x ?? 3000.0;
     double targetY = y ?? 3000.0;
 
@@ -277,7 +361,6 @@ class RsipEngine extends ChangeNotifier {
     final prevTitle = target.title;
     final prevContent = target.content;
 
-    // 独立更新备注开关（绝不写入版本历史）
     if (promptNoteOnIncrease != null) {
       target.promptNoteOnIncrease = promptNoteOnIncrease;
     }
@@ -287,6 +370,7 @@ class RsipEngine extends ChangeNotifier {
 
     if (attributeChanges != null) {
       for (final change in attributeChanges) {
+        // 属性更名：平滑迁移历史记录键名
         if (change.type == 0 &&
             change.oldName != null &&
             change.newName != null &&
@@ -299,7 +383,9 @@ class RsipEngine extends ChangeNotifier {
               }
             }
           }
-        } else if (change.type == -1 && change.oldName != null) {
+        }
+        // 属性删除：级联清理所有历史流水中的数据绑定
+        else if (change.type == -1 && change.oldName != null) {
           for (final record in _history) {
             if (record.nodeId == id && record.attributeDeltas != null) {
               record.attributeDeltas!.remove(change.oldName);
@@ -315,7 +401,6 @@ class RsipEngine extends ChangeNotifier {
       target.numericAttributes = List.from(numericAttributes);
     }
 
-    // 仅在有内容修改且用户确认时记录修订
     if (recordToHistory) {
       target.version += 1;
       _history.add(
@@ -341,12 +426,17 @@ class RsipEngine extends ChangeNotifier {
     _saveToStorage();
   }
 
+  // ==========================================
+  // 打卡流水与修改
+  // ==========================================
+
   void changeProgress(
     String id,
     int delta, {
     String? note,
+    List<String>? tags,
     Map<String, double>? attributeDeltas,
-    DateTime? recordDate, // 支持传入用户选择的记录日期
+    DateTime? recordDate,
   }) {
     final target = _nodes.firstWhere((n) => n.id == id);
     if (target.isPrompt) return;
@@ -380,10 +470,62 @@ class RsipEngine extends ChangeNotifier {
         delta: delta,
         resultProgress: target.progress,
         note: (note != null && note.trim().isNotEmpty) ? note.trim() : null,
+        tags: (tags != null && tags.isNotEmpty) ? tags : null,
         attributeDeltas: attributeDeltas,
-        time: recordDate ?? DateTime.now(), // 存储选择的日期
+        time: recordDate ?? DateTime.now(),
       ),
     );
+    notifyListeners();
+    _saveToStorage();
+  }
+
+  void updateRecord({
+    required String recordId,
+    required DateTime newDate,
+    String? newNote,
+    List<String>? newTags,
+    Map<String, double>? newAttributeDeltas,
+  }) {
+    final index = _history.indexWhere((r) => r.id == recordId);
+    if (index == -1) return;
+    final oldRecord = _history[index];
+    if (oldRecord.isEdit) return;
+
+    final nodeIndex = _nodes.indexWhere((n) => n.id == oldRecord.nodeId);
+    if (nodeIndex != -1) {
+      final node = _nodes[nodeIndex];
+      if (newAttributeDeltas != null) {
+        for (final attr in node.numericAttributes) {
+          final oldVal = oldRecord.attributeDeltas?[attr.name] ?? 0.0;
+          final newVal = newAttributeDeltas[attr.name] ?? 0.0;
+          attr.totalValue += (newVal - oldVal);
+        }
+      }
+      if (oldRecord.note == node.latestNote && newNote != null) {
+        node.latestNote = newNote.trim().isEmpty ? null : newNote.trim();
+      }
+    }
+
+    final updatedRecord = ProgressRecord(
+      id: oldRecord.id,
+      nodeId: oldRecord.nodeId,
+      nodeTitle: oldRecord.nodeTitle,
+      delta: oldRecord.delta,
+      resultProgress: oldRecord.resultProgress,
+      note: newNote?.trim().isEmpty == true ? null : newNote?.trim(),
+      tags: (newTags != null && newTags.isNotEmpty) ? newTags : null,
+      attributeDeltas: newAttributeDeltas,
+      revision: oldRecord.revision,
+      isEdit: oldRecord.isEdit,
+      oldTitle: oldRecord.oldTitle,
+      newTitle: oldRecord.newTitle,
+      oldContent: oldRecord.oldContent,
+      newContent: oldRecord.newContent,
+      attributeChanges: oldRecord.attributeChanges,
+      time: newDate,
+    );
+
+    _history[index] = updatedRecord;
     notifyListeners();
     _saveToStorage();
   }
@@ -430,28 +572,6 @@ class RsipEngine extends ChangeNotifier {
     }
 
     _history.removeAt(index);
-    notifyListeners();
-    _saveToStorage();
-  }
-
-  void reorderNodes(int oldIndex, int newIndex) {
-    final visible = _nodes.where((n) => !n.isPrompt).toList();
-    if (oldIndex < 0 || oldIndex >= visible.length) return;
-
-    if (oldIndex < newIndex) {
-      newIndex -= 1;
-    }
-    final movedItem = visible.removeAt(oldIndex);
-    visible.insert(newIndex, movedItem);
-
-    // 依序填回 _nodes 中（保持提示节点位置不受影响）
-    int vIdx = 0;
-    for (int i = 0; i < _nodes.length; i++) {
-      if (!_nodes[i].isPrompt) {
-        _nodes[i] = visible[vIdx++];
-      }
-    }
-
     notifyListeners();
     _saveToStorage();
   }

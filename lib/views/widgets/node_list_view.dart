@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../core/app_theme.dart';
+import '../../core/progress_color_helper.dart';
 import '../../engine/rsip_engine.dart';
 import '../../models/focus_node_model.dart';
 
@@ -34,7 +35,6 @@ class NodeListView extends StatelessWidget {
       );
     }
 
-    // 支持长按拖拽排序的无缝列表
     return ReorderableListView.builder(
       padding: const EdgeInsets.only(top: 0, bottom: 24),
       itemCount: visibleNodes.length,
@@ -65,6 +65,8 @@ class NodeListView extends StatelessWidget {
 
   Widget _buildSeamlessNodeRow(FocusNodeModel node) {
     final isSelected = node.id == engine.selectedNodeId;
+    final increaseTextColor = ProgressColorHelper.getIncreaseColor(node.increaseCount);
+    final increaseBgColor = ProgressColorHelper.getIncreaseBgColor(node.increaseCount);
 
     return InkWell(
       onTap: () => engine.selectNode(node.id),
@@ -93,13 +95,13 @@ class NodeListView extends StatelessWidget {
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
                       decoration: BoxDecoration(
-                        color: Colors.green.withValues(alpha: 0.12),
+                        color: increaseBgColor,
                         borderRadius: BorderRadius.circular(5),
                       ),
                       child: Text(
                         '+${node.increaseCount}',
                         style: TextStyle(
-                          color: Colors.green.shade700,
+                          color: increaseTextColor,
                           fontSize: 12,
                           fontWeight: FontWeight.w900,
                         ),
@@ -121,8 +123,6 @@ class NodeListView extends StatelessWidget {
                         ),
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    const Icon(Icons.drag_indicator_rounded, size: 18, color: Colors.black26),
                   ],
                 ),
               ],
@@ -163,25 +163,6 @@ class NodeListView extends StatelessWidget {
                     ),
                   );
                 }).toList(),
-              ),
-            ],
-            if (node.latestNote != null && node.latestNote!.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: AppTheme.bgCanvas,
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Text(
-                  node.latestNote!,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: Colors.black87,
-                    height: 1.35,
-                  ),
-                ),
               ),
             ],
           ],

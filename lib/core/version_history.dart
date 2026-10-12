@@ -17,6 +17,17 @@ class VersionHistoryConfig {
 
   static const List<VersionRelease> releases = [
       VersionRelease(
+      version: '0.4.0',
+      releaseDate: '2026-10-12',
+      changeLogs: [
+        '新增：编辑功能',
+        '新增：延后当日功能',
+        '新增：颜色深度增加变深',
+        '新增：标签功能',
+        '优化：备注内容不在首页显示',
+      ],
+    ),
+      VersionRelease(
       version: '0.3.0',
       releaseDate: '2026-10-11',
       changeLogs: [

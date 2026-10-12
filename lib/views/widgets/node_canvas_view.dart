@@ -805,8 +805,11 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
     final progColor = ProgressColorHelper.getColor(node.progress);
     final progBg = ProgressColorHelper.getBgColor(node.progress);
     final solidBgColor = Color.alphaBlend(progBg, AppTheme.surfaceWhite);
-
     final isHighlighted = isSelectedSingle || isHighlightedGroup;
+
+    // 动态增加深度色
+    final incTextColor = ProgressColorHelper.getIncreaseColor(node.increaseCount);
+    final incBgColor = ProgressColorHelper.getIncreaseBgColor(node.increaseCount);
 
     return Container(
       width: _normalWidth,
@@ -820,7 +823,7 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
               ? AppTheme.skyBlue
               : isHighlighted
                   ? AppTheme.primaryBlue
-                  : progColor.withValues(alpha: 0.5),
+                  : progColor.withValues(alpha: 0.55),
           width: 1.5,
         ),
         boxShadow: [
@@ -857,12 +860,12 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
                         decoration: BoxDecoration(
-                          color: Colors.green.withValues(alpha: 0.12),
+                          color: incBgColor,
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: Text(
                           '+${node.increaseCount}',
-                          style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: Colors.green.shade700),
+                          style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: incTextColor),
                         ),
                       ),
                       const SizedBox(width: 3),
