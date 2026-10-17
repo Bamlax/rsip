@@ -23,7 +23,6 @@ class NodeDetailScreen extends StatefulWidget {
 }
 
 class _NodeDetailScreenState extends State<NodeDetailScreen> {
-  // 单例互斥滑动控制器
   final ValueNotifier<String?> _openedRowNotifier = ValueNotifier(null);
 
   @override
@@ -137,7 +136,6 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
         }
 
         final nodeHistory = widget.engine.history.where((r) => r.nodeId == node!.id).toList();
-        // 按照时间降序（最新在上）
         nodeHistory.sort((a, b) => b.time.compareTo(a.time));
 
         final progColor = ProgressColorHelper.getColor(node.progress);
@@ -171,10 +169,9 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
             ],
           ),
           body: ListView(
-            // 与上部栏零间距贴合
             padding: const EdgeInsets.only(top: 0, bottom: 24),
             children: [
-              // 1. 顶部大卡片：核心统计
+              // 1. 顶部统计大卡片
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
                 decoration: const BoxDecoration(
@@ -284,7 +281,6 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
               ),
 
               const SizedBox(height: 14),
-              // 模块标题：详情
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                 child: Text(
@@ -299,7 +295,7 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
               ),
               const SizedBox(height: 6),
 
-              // 2. 「详情」流水列表：左滑编辑与删除（版本修订锁定不可左滑）
+              // 2. 流水明细列表
               if (nodeHistory.isEmpty)
                 Container(
                   padding: const EdgeInsets.symmetric(vertical: 36),
@@ -319,7 +315,7 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
                         if (i > 0) const Divider(height: 1, thickness: 0.8, color: AppTheme.borderLight),
                         SwipeableRecordRow(
                           recordId: nodeHistory[i].id,
-                          enabled: !nodeHistory[i].isEdit, // 版本修订锁定防滑
+                          enabled: !nodeHistory[i].isEdit,
                           openedRowNotifier: _openedRowNotifier,
                           onEdit: () => _openEditRecord(context, nodeHistory[i]),
                           onDelete: () => _confirmDeleteRecord(context, nodeHistory[i]),
@@ -368,7 +364,6 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
 
   Widget _buildSeamlessHistoryRow(ProgressRecord record, FocusNodeModel node) {
     final isGain = record.delta > 0;
-    // 增加浅绿，减少浅红，修订浅蓝
     final Color rowBgColor = record.isEdit
         ? const Color(0xFFF0F7FF)
         : (isGain ? const Color(0xFFF2FBF4) : const Color(0xFFFDF3F3));
@@ -414,13 +409,11 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
                         style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: AppTheme.deepNavy),
                       ),
               ),
-              // 统一无框纯日期展示
               Text(
                 timeStr,
                 style: const TextStyle(fontSize: 11, color: Colors.black45),
               ),
               const SizedBox(width: 10),
-              // 净值或修订说明
               Text(
                 record.isEdit
                     ? '版本修订'
@@ -434,7 +427,7 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
             ],
           ),
 
-          // 1. 内容修改差异比对（划掉删除的内容）
+          // 1. 内容修改差异比对（删除内容划红线）
           if (record.isEdit && (record.oldContent != null || record.newContent != null)) ...[
             const SizedBox(height: 8),
             Container(
@@ -455,7 +448,54 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
             ),
           ],
 
-          // 2. 属性的修改与删除比对呈现（删除的内容划红线）
+          // 2. 重复规则修改对比呈现（旧规则划红线，新规则高亮）
+          if (record.isEdit &&
+              record.oldRepeatDesc != null &&
+              record.newRepeatDesc != null &&
+              record.oldRepeatDesc != record.newRepeatDesc) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.7),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: RichText(
+                text: TextSpan(
+                  children: [
+                    const TextSpan(
+                      text: '重复规则: ',
+                      style: TextStyle(fontSize: 11, color: Colors.black45),
+                    ),
+                    TextSpan(
+                      text: record.oldRepeatDesc!,
+                      style: TextStyle(
+                        fontSize: 12,
+                        decoration: TextDecoration.lineThrough,
+                        decorationColor: Colors.red.shade400,
+                        decorationThickness: 2.0,
+                        color: Colors.red.shade400,
+                      ),
+                    ),
+                    const TextSpan(
+                      text: ' ➔ ',
+                      style: TextStyle(fontSize: 12, color: Colors.black38),
+                    ),
+                    TextSpan(
+                      text: record.newRepeatDesc!,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: AppTheme.primaryBlue,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+
+          // 3. 属性修改与删除对比
           if (record.isEdit &&
               record.attributeChanges != null &&
               record.attributeChanges!.isNotEmpty) ...[

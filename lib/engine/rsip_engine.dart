@@ -15,7 +15,6 @@ class RsipEngine extends ChangeNotifier {
   bool _isGroupSelectMode = false;
   final Set<String> _groupSelectedNodeIds = {};
 
-  // 跨天延后小时数 (0 ~ 12，例如设为 3，则凌晨 3:00 前的记录仍算在前一天)
   int _dayStartHourOffset = 0;
 
   int get dayStartHourOffset => _dayStartHourOffset;
@@ -41,10 +40,6 @@ class RsipEngine extends ChangeNotifier {
   RsipEngine() {
     _loadFromStorage();
   }
-
-  // ==========================================
-  // 本地持久化 (Storage)
-  // ==========================================
 
   static const String _keyNodes = 'rsip_nodes_data';
   static const String _keyConnections = 'rsip_connections_data';
@@ -119,7 +114,7 @@ class RsipEngine extends ChangeNotifier {
   }
 
   // ==========================================
-  // 日期归属与延后计算
+  // 日期归属、排期与今日完成状态判定
   // ==========================================
 
   void setDayStartHourOffset(int hours) {
@@ -128,23 +123,101 @@ class RsipEngine extends ChangeNotifier {
     _saveToStorage();
   }
 
-  /// 计算归属日期（根据延后小时偏移计算）
+  /// 计算归属日期（若已是日历选择器生成的零点纯日期则直接返回，否则扣除延后小时）
   DateTime getEffectiveDate(DateTime dt) {
+    if (dt.hour == 0 && dt.minute == 0 && dt.second == 0 && dt.millisecond == 0) {
+      return DateTime(dt.year, dt.month, dt.day);
+    }
     final adjusted = dt.subtract(Duration(hours: _dayStartHourOffset));
     return DateTime(adjusted.year, adjusted.month, adjusted.day);
   }
 
-  /// 格式化为归属日期的 YYYY-MM-DD
   String formatRecordDate(DateTime dt) {
     final d = getEffectiveDate(dt);
     return '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+  }
+
+  bool _isSameDay(DateTime a, DateTime b) {
+    return a.year == b.year && a.month == b.month && a.day == b.day;
+  }
+
+  /// 判断节点在今天是否已经打卡完成（存在今日的正向记录）
+  bool isNodeCompletedToday(FocusNodeModel node) {
+    if (node.isPrompt) return false;
+    final today = getEffectiveDate(DateTime.now());
+    return _history.any((r) =>
+        !r.isEdit &&
+        r.nodeId == node.id &&
+        r.delta > 0 &&
+        _isSameDay(getEffectiveDate(r.time), today));
+  }
+
+  /// 判断节点根据重复规则是否排期在今天执行
+  bool isNodeScheduledToday(FocusNodeModel node) {
+    if (node.isPrompt) return true;
+    final today = getEffectiveDate(DateTime.now());
+
+    if (node.repeatMode == 0) {
+      // 模式 0：周一到周日自选
+      return node.repeatWeekdays.contains(today.weekday);
+    } else {
+      final freqVal = node.repeatFreqValue.clamp(1, 365);
+      if (node.repeatFreqType == 0) {
+        // 每 X 天
+        if (freqVal <= 1) return true;
+        DateTime? lastDate;
+        for (final r in _history) {
+          if (!r.isEdit && r.nodeId == node.id && r.delta > 0) {
+            final d = getEffectiveDate(r.time);
+            if (d.isBefore(today)) {
+              if (lastDate == null || d.isAfter(lastDate)) {
+                lastDate = d;
+              }
+            }
+          }
+        }
+        if (lastDate == null) return true;
+        return today.difference(lastDate).inDays >= freqVal;
+      } else if (node.repeatFreqType == 1) {
+        // 每周 X 次（统计本周一至今日之前的完成次数）
+        final weekStart = today.subtract(Duration(days: today.weekday - 1));
+        int countBeforeToday = 0;
+        for (final r in _history) {
+          if (!r.isEdit && r.nodeId == node.id && r.delta > 0) {
+            final d = getEffectiveDate(r.time);
+            if (!d.isBefore(weekStart) && d.isBefore(today)) {
+              countBeforeToday++;
+            }
+          }
+        }
+        return countBeforeToday < freqVal;
+      } else {
+        // 每月 X 次（统计本月1号至今日之前的完成次数）
+        final monthStart = DateTime(today.year, today.month, 1);
+        int countBeforeToday = 0;
+        for (final r in _history) {
+          if (!r.isEdit && r.nodeId == node.id && r.delta > 0) {
+            final d = getEffectiveDate(r.time);
+            if (!d.isBefore(monthStart) && d.isBefore(today)) {
+              countBeforeToday++;
+            }
+          }
+        }
+        return countBeforeToday < freqVal;
+      }
+    }
+  }
+
+  /// 节点今日是否处于“待办活跃”状态（是今日排期且今日未完成）
+  bool isNodeActiveToday(FocusNodeModel node) {
+    if (node.isPrompt) return true;
+    return isNodeScheduledToday(node) && !isNodeCompletedToday(node);
   }
 
   // ==========================================
   // 标签管理 (增加与减少隔离)
   // ==========================================
 
-  /// 获取历史打卡使用过的标签列表
   List<String> getHistoricalTags({required bool isIncrease}) {
     final Set<String> tagSet = {};
     for (final record in _history) {
@@ -158,11 +231,11 @@ class RsipEngine extends ChangeNotifier {
   }
 
   // ==========================================
-  // 节点拖拽排序
+  // 节点拖拽排序（适配列表过滤后的可见项）
   // ==========================================
 
   void reorderNodes(int oldIndex, int newIndex) {
-    final visible = _nodes.where((n) => !n.isPrompt).toList();
+    final visible = _nodes.where((n) => !n.isPrompt && isNodeActiveToday(n)).toList();
     if (oldIndex < 0 || oldIndex >= visible.length) return;
 
     if (oldIndex < newIndex) {
@@ -171,9 +244,10 @@ class RsipEngine extends ChangeNotifier {
     final movedItem = visible.removeAt(oldIndex);
     visible.insert(newIndex, movedItem);
 
+    final visibleIds = visible.map((n) => n.id).toSet();
     int vIdx = 0;
     for (int i = 0; i < _nodes.length; i++) {
-      if (!_nodes[i].isPrompt) {
+      if (visibleIds.contains(_nodes[i].id)) {
         _nodes[i] = visible[vIdx++];
       }
     }
@@ -294,6 +368,10 @@ class RsipEngine extends ChangeNotifier {
     bool isPrompt = false,
     bool promptNoteOnIncrease = true,
     bool promptNoteOnDecrease = true,
+    int repeatMode = 0,
+    List<int>? repeatWeekdays,
+    int repeatFreqType = 0,
+    int repeatFreqValue = 1,
     List<NumericAttribute>? numericAttributes,
     double? x,
     double? y,
@@ -319,6 +397,10 @@ class RsipEngine extends ChangeNotifier {
       isPrompt: isPrompt,
       promptNoteOnIncrease: promptNoteOnIncrease,
       promptNoteOnDecrease: promptNoteOnDecrease,
+      repeatMode: repeatMode,
+      repeatWeekdays: repeatWeekdays,
+      repeatFreqType: repeatFreqType,
+      repeatFreqValue: repeatFreqValue,
       numericAttributes: numericAttributes,
       x: targetX,
       y: targetY,
@@ -353,6 +435,10 @@ class RsipEngine extends ChangeNotifier {
     String newContent, {
     bool? promptNoteOnIncrease,
     bool? promptNoteOnDecrease,
+    int? repeatMode,
+    List<int>? repeatWeekdays,
+    int? repeatFreqType,
+    int? repeatFreqValue,
     List<NumericAttribute>? numericAttributes,
     List<AttributeChange>? attributeChanges,
     bool recordToHistory = false,
@@ -360,6 +446,7 @@ class RsipEngine extends ChangeNotifier {
     final target = _nodes.firstWhere((n) => n.id == id);
     final prevTitle = target.title;
     final prevContent = target.content;
+    final prevRepeatDesc = target.repeatDescription; // 记录修改前的重复规则
 
     if (promptNoteOnIncrease != null) {
       target.promptNoteOnIncrease = promptNoteOnIncrease;
@@ -367,10 +454,23 @@ class RsipEngine extends ChangeNotifier {
     if (promptNoteOnDecrease != null) {
       target.promptNoteOnDecrease = promptNoteOnDecrease;
     }
+    if (repeatMode != null) {
+      target.repeatMode = repeatMode;
+    }
+    if (repeatWeekdays != null && repeatWeekdays.isNotEmpty) {
+      target.repeatWeekdays = List.from(repeatWeekdays);
+    }
+    if (repeatFreqType != null) {
+      target.repeatFreqType = repeatFreqType;
+    }
+    if (repeatFreqValue != null) {
+      target.repeatFreqValue = repeatFreqValue;
+    }
+
+    final currentRepeatDesc = target.repeatDescription; // 获取修改后的重复规则
 
     if (attributeChanges != null) {
       for (final change in attributeChanges) {
-        // 属性更名：平滑迁移历史记录键名
         if (change.type == 0 &&
             change.oldName != null &&
             change.newName != null &&
@@ -383,9 +483,7 @@ class RsipEngine extends ChangeNotifier {
               }
             }
           }
-        }
-        // 属性删除：级联清理所有历史流水中的数据绑定
-        else if (change.type == -1 && change.oldName != null) {
+        } else if (change.type == -1 && change.oldName != null) {
           for (final record in _history) {
             if (record.nodeId == id && record.attributeDeltas != null) {
               record.attributeDeltas!.remove(change.oldName);
@@ -416,6 +514,8 @@ class RsipEngine extends ChangeNotifier {
           newTitle: newTitle,
           oldContent: prevContent,
           newContent: newContent,
+          oldRepeatDesc: prevRepeatDesc != currentRepeatDesc ? prevRepeatDesc : null,
+          newRepeatDesc: prevRepeatDesc != currentRepeatDesc ? currentRepeatDesc : null,
           attributeChanges: attributeChanges,
           time: DateTime.now(),
         ),

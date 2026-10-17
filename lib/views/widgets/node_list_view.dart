@@ -15,21 +15,31 @@ class NodeListView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final visibleNodes = engine.nodes.where((n) => !n.isPrompt).toList();
+    final allNormalNodes = engine.nodes.where((n) => !n.isPrompt).toList();
+    // 仅展示今日排期且今日尚未完成的节点
+    final visibleNodes = allNormalNodes.where((n) => engine.isNodeActiveToday(n)).toList();
 
     if (visibleNodes.isEmpty) {
+      final hasNodes = allNormalNodes.isNotEmpty;
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.notes_rounded, size: 56, color: AppTheme.primaryBlue.withValues(alpha: 0.3)),
+            Icon(
+              hasNodes ? Icons.task_alt_rounded : Icons.notes_rounded,
+              size: 56,
+              color: AppTheme.primaryBlue.withValues(alpha: 0.3),
+            ),
             const SizedBox(height: 12),
-            const Text(
-              '暂无国策节点',
-              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: AppTheme.deepNavy),
+            Text(
+              hasNodes ? '今日待办国策已全部完成' : '暂无国策节点',
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: AppTheme.deepNavy),
             ),
             const SizedBox(height: 4),
-            const Text('点击右下角按钮添加国策，长按可上下拖拽排序', style: TextStyle(fontSize: 12, color: Colors.black38)),
+            Text(
+              hasNodes ? '已完成或非今日排期的节点可在「树」界面查看' : '点击右下角按钮添加国策，长按可上下拖拽排序',
+              style: const TextStyle(fontSize: 12, color: Colors.black38),
+            ),
           ],
         ),
       );
@@ -67,6 +77,7 @@ class NodeListView extends StatelessWidget {
     final isSelected = node.id == engine.selectedNodeId;
     final increaseTextColor = ProgressColorHelper.getIncreaseColor(node.increaseCount);
     final increaseBgColor = ProgressColorHelper.getIncreaseBgColor(node.increaseCount);
+    final repeatDesc = node.repeatDescription;
 
     return InkWell(
       onTap: () => engine.selectNode(node.id),
@@ -80,13 +91,40 @@ class NodeListView extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Expanded(
-                  child: Text(
-                    node.title,
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w800,
-                      color: AppTheme.deepNavy,
-                    ),
+                  child: Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          node.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w800,
+                            color: AppTheme.deepNavy,
+                          ),
+                        ),
+                      ),
+                      if (repeatDesc != '每天') ...[
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                          decoration: BoxDecoration(
+                            color: AppTheme.bgCanvas,
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: AppTheme.borderLight),
+                          ),
+                          child: Text(
+                            repeatDesc,
+                            style: const TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.black54,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
                 Row(

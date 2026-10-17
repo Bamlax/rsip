@@ -807,99 +807,105 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
     final solidBgColor = Color.alphaBlend(progBg, AppTheme.surfaceWhite);
     final isHighlighted = isSelectedSingle || isHighlightedGroup;
 
-    // 动态增加深度色
     final incTextColor = ProgressColorHelper.getIncreaseColor(node.increaseCount);
     final incBgColor = ProgressColorHelper.getIncreaseBgColor(node.increaseCount);
 
-    return Container(
-      width: _normalWidth,
-      height: _normalHeight,
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        color: isHighlighted ? AppTheme.subtleFill : solidBgColor,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: isDragging
-              ? AppTheme.skyBlue
-              : isHighlighted
-                  ? AppTheme.primaryBlue
-                  : progColor.withValues(alpha: 0.55),
-          width: 1.5,
-        ),
-        boxShadow: [
-          BoxShadow(
+    // 判断是否为今日待办活跃节点；若非今日节点或今日已完成，则略透明显示
+    final isActiveToday = widget.engine.isNodeActiveToday(node);
+
+    return AnimatedOpacity(
+      duration: const Duration(milliseconds: 200),
+      opacity: (isActiveToday || isHighlighted || isDragging) ? 1.0 : 0.38,
+      child: Container(
+        width: _normalWidth,
+        height: _normalHeight,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: isHighlighted ? AppTheme.subtleFill : solidBgColor,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
             color: isDragging
-                ? AppTheme.primaryBlue.withValues(alpha: 0.35)
+                ? AppTheme.skyBlue
                 : isHighlighted
-                    ? AppTheme.primaryBlue.withValues(alpha: 0.2)
-                    : progColor.withValues(alpha: 0.08),
-            blurRadius: (isDragging || isHighlighted) ? 8 : 4,
-            offset: const Offset(0, 2),
+                    ? AppTheme.primaryBlue
+                    : progColor.withValues(alpha: 0.55),
+            width: 1.5,
           ),
-        ],
-      ),
-      child: Stack(
-        children: [
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      node.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: AppTheme.deepNavy),
-                    ),
-                  ),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-                        decoration: BoxDecoration(
-                          color: incBgColor,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          '+${node.increaseCount}',
-                          style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: incTextColor),
-                        ),
-                      ),
-                      const SizedBox(width: 3),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-                        decoration: BoxDecoration(
-                          color: Colors.red.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          '-${node.decreaseCount}',
-                          style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: Colors.red.shade700),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Text(
-                node.content.isEmpty ? '（无详细内容）' : node.content,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 11, color: Colors.black54, height: 1.25),
-              ),
-            ],
-          ),
-          if (isHighlightedGroup)
-            const Positioned(
-              right: 0,
-              bottom: 0,
-              child: Icon(Icons.check_circle, size: 16, color: AppTheme.primaryBlue),
+          boxShadow: [
+            BoxShadow(
+              color: isDragging
+                  ? AppTheme.primaryBlue.withValues(alpha: 0.35)
+                  : isHighlighted
+                      ? AppTheme.primaryBlue.withValues(alpha: 0.2)
+                      : progColor.withValues(alpha: 0.08),
+              blurRadius: (isDragging || isHighlighted) ? 8 : 4,
+              offset: const Offset(0, 2),
             ),
-        ],
+          ],
+        ),
+        child: Stack(
+          children: [
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        node.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: AppTheme.deepNavy),
+                      ),
+                    ),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                          decoration: BoxDecoration(
+                            color: incBgColor,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            '+${node.increaseCount}',
+                            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: incTextColor),
+                          ),
+                        ),
+                        const SizedBox(width: 3),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                          decoration: BoxDecoration(
+                            color: Colors.red.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            '-${node.decreaseCount}',
+                            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: Colors.red.shade700),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  node.content.isEmpty ? '（无详细内容）' : node.content,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 11, color: Colors.black54, height: 1.25),
+                ),
+              ],
+            ),
+            if (isHighlightedGroup)
+              const Positioned(
+                right: 0,
+                bottom: 0,
+                child: Icon(Icons.check_circle, size: 16, color: AppTheme.primaryBlue),
+              ),
+          ],
+        ),
       ),
     );
   }

@@ -21,9 +21,13 @@ class _EditNodeDialogState extends State<EditNodeDialog> {
   late final TextEditingController _titleController;
   late final TextEditingController _contentController;
 
-  // 左右长方形块控制开关（修改绝不计入版本历史）
   late bool _promptNoteOnIncrease;
   late bool _promptNoteOnDecrease;
+
+  late int _repeatMode;
+  late final Set<int> _selectedWeekdays;
+  late int _repeatFreqType;
+  late int _repeatFreqValue;
 
   final List<String> _attrIds = [];
   final List<TextEditingController> _attrNameControllers = [];
@@ -36,6 +40,11 @@ class _EditNodeDialogState extends State<EditNodeDialog> {
     _contentController = TextEditingController(text: widget.node.content);
     _promptNoteOnIncrease = widget.node.promptNoteOnIncrease;
     _promptNoteOnDecrease = widget.node.promptNoteOnDecrease;
+
+    _repeatMode = widget.node.repeatMode;
+    _selectedWeekdays = Set<int>.from(widget.node.repeatWeekdays);
+    _repeatFreqType = widget.node.repeatFreqType;
+    _repeatFreqValue = widget.node.repeatFreqValue;
 
     for (final attr in widget.node.numericAttributes) {
       _attrIds.add(attr.id);
@@ -119,6 +128,213 @@ class _EditNodeDialogState extends State<EditNodeDialog> {
     );
   }
 
+  Widget _buildRepeatSection() {
+    const dayLabels = ['一', '二', '三', '四', '五', '六', '日'];
+    const freqLabels = ['每X天', '每周X次', '每月X次'];
+
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: AppTheme.bgCanvas,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppTheme.borderLight),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                _repeatMode == 0 && _selectedWeekdays.length == 7
+                    ? '重复规则：每天'
+                    : '重复规则',
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: AppTheme.deepNavy,
+                ),
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _buildMiniModeTab('按星期', _repeatMode == 0, () {
+                    setState(() => _repeatMode = 0);
+                  }),
+                  const SizedBox(width: 6),
+                  _buildMiniModeTab('按频次', _repeatMode == 1, () {
+                    setState(() => _repeatMode = 1);
+                  }),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          if (_repeatMode == 0)
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: List.generate(7, (idx) {
+                final day = idx + 1;
+                final selected = _selectedWeekdays.contains(day);
+                return GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      if (selected && _selectedWeekdays.length > 1) {
+                        _selectedWeekdays.remove(day);
+                      } else {
+                        _selectedWeekdays.add(day);
+                      }
+                    });
+                  },
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 120),
+                    width: 32,
+                    height: 32,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: selected ? AppTheme.primaryBlue : AppTheme.surfaceWhite,
+                      borderRadius: BorderRadius.circular(7),
+                      border: Border.all(
+                        color: selected ? AppTheme.primaryBlue : AppTheme.borderLight,
+                      ),
+                    ),
+                    child: Text(
+                      dayLabels[idx],
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: selected ? Colors.white : Colors.black54,
+                      ),
+                    ),
+                  ),
+                );
+              }),
+            )
+          else
+            Column(
+              children: [
+                Row(
+                  children: List.generate(3, (idx) {
+                    final selected = _repeatFreqType == idx;
+                    return Expanded(
+                      child: Padding(
+                        padding: EdgeInsets.only(right: idx < 2 ? 6.0 : 0.0),
+                        child: GestureDetector(
+                          onTap: () => setState(() {
+                            _repeatFreqType = idx;
+                            final maxLimit = idx == 1 ? 7 : (idx == 2 ? 31 : 99);
+                            if (_repeatFreqValue > maxLimit) {
+                              _repeatFreqValue = maxLimit;
+                            }
+                          }),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(vertical: 6),
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              color: selected ? AppTheme.subtleFill : AppTheme.surfaceWhite,
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(
+                                color: selected ? AppTheme.primaryBlue : AppTheme.borderLight,
+                              ),
+                            ),
+                            child: Text(
+                              freqLabels[idx],
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+                                color: selected ? AppTheme.primaryBlue : Colors.black54,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  }),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      _repeatFreqType == 0
+                          ? '每 '
+                          : (_repeatFreqType == 1 ? '每周 ' : '每月 '),
+                      style: const TextStyle(fontSize: 12, color: Colors.black87),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.remove_circle_outline, size: 20),
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                      constraints: const BoxConstraints(),
+                      color: _repeatFreqValue > 1 ? AppTheme.primaryBlue : Colors.black26,
+                      onPressed: _repeatFreqValue > 1
+                          ? () => setState(() => _repeatFreqValue--)
+                          : null,
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: AppTheme.surfaceWhite,
+                        borderRadius: BorderRadius.circular(5),
+                        border: Border.all(color: AppTheme.borderLight),
+                      ),
+                      child: Text(
+                        '$_repeatFreqValue',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w800,
+                          color: AppTheme.deepNavy,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.add_circle_outline, size: 20),
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                      constraints: const BoxConstraints(),
+                      color: AppTheme.primaryBlue,
+                      onPressed: () {
+                        final maxLimit = _repeatFreqType == 1 ? 7 : (_repeatFreqType == 2 ? 31 : 99);
+                        if (_repeatFreqValue < maxLimit) {
+                          setState(() => _repeatFreqValue++);
+                        }
+                      },
+                    ),
+                    Text(
+                      _repeatFreqType == 0 ? ' 天' : ' 次',
+                      style: const TextStyle(fontSize: 12, color: Colors.black87),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMiniModeTab(String text, bool active, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: active ? AppTheme.primaryBlue : AppTheme.surfaceWhite,
+          borderRadius: BorderRadius.circular(5),
+          border: Border.all(
+            color: active ? AppTheme.primaryBlue : AppTheme.borderLight,
+          ),
+        ),
+        child: Text(
+          text,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.bold,
+            color: active ? Colors.white : Colors.black54,
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _handleSave() async {
     final title = _titleController.text.trim();
     final content = _contentController.text.trim();
@@ -189,8 +405,19 @@ class _EditNodeDialogState extends State<EditNodeDialog> {
       }
     }
 
+    // 计算修改后的重复规则描述
+    final newRepeatDesc = FocusNodeModel.formatRepeatRule(
+      mode: _repeatMode,
+      weekdays: _selectedWeekdays.toList(),
+      freqType: _repeatFreqType,
+      freqValue: _repeatFreqValue,
+    );
+    final bool hasRepeatChanged = newRepeatDesc != widget.node.repeatDescription;
+
+    // 标题、内容、重复规则或数字属性任一变动，均触发版本记录确认
     final bool hasContentChanged = title != widget.node.title ||
         content != widget.node.content ||
+        hasRepeatChanged ||
         attrChanges.isNotEmpty;
 
     bool shouldRecord = false;
@@ -240,6 +467,10 @@ class _EditNodeDialogState extends State<EditNodeDialog> {
       content,
       promptNoteOnIncrease: _promptNoteOnIncrease,
       promptNoteOnDecrease: _promptNoteOnDecrease,
+      repeatMode: _repeatMode,
+      repeatWeekdays: _selectedWeekdays.toList()..sort(),
+      repeatFreqType: _repeatFreqType,
+      repeatFreqValue: _repeatFreqValue,
       numericAttributes: newAttrs,
       attributeChanges: attrChanges,
       recordToHistory: shouldRecord,
@@ -294,9 +525,11 @@ class _EditNodeDialogState extends State<EditNodeDialog> {
                 ),
               ),
 
-              // 横向一行左右两边的长方形块（不计入版本历史）
               if (!widget.node.isPrompt) ...[
                 const SizedBox(height: 12),
+                _buildRepeatSection(),
+                const SizedBox(height: 10),
+
                 Row(
                   children: [
                     Expanded(
@@ -322,7 +555,6 @@ class _EditNodeDialogState extends State<EditNodeDialog> {
                 ),
                 const SizedBox(height: 14),
 
-                // 数字属性定义
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [

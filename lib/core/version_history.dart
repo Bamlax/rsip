@@ -17,6 +17,14 @@ class VersionHistoryConfig {
 
   static const List<VersionRelease> releases = [
       VersionRelease(
+      version: '0.5.0',
+      releaseDate: '2026-10-17',
+      changeLogs: [
+        '新增：自定义重复日期功能',
+        '新增：列表节点自动隐藏功能以及树的半透明显示',
+      ],
+    ),
+      VersionRelease(
       version: '0.4.0',
       releaseDate: '2026-10-12',
       changeLogs: [
