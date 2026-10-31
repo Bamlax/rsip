@@ -11,6 +11,7 @@ import 'widgets/node_detail_screen.dart';
 import 'widgets/node_list_view.dart';
 import 'widgets/progress_note_dialog.dart';
 import 'widgets/settings_view.dart';
+import 'widgets/statistics_view.dart';
 
 class MainScreen extends StatefulWidget {
   final RsipEngine engine;
@@ -105,7 +106,8 @@ class _MainScreenState extends State<MainScreen> {
                 isConnectMode: _isConnectMode,
               ),
               HistoryView(engine: widget.engine),
-              SettingsView(engine: widget.engine),
+              StatisticsView(engine: widget.engine), // 索引 3：统计界面
+              SettingsView(engine: widget.engine),   // 索引 4：设置界面
             ],
           ),
           floatingActionButton: _currentViewIndex == 0
@@ -155,6 +157,11 @@ class _MainScreenState extends State<MainScreen> {
                   label: '历史',
                 ),
                 BottomNavigationBarItem(
+                  icon: Icon(Icons.analytics_outlined),
+                  activeIcon: Icon(Icons.analytics),
+                  label: '统计',
+                ),
+                BottomNavigationBarItem(
                   icon: Icon(Icons.settings_outlined),
                   activeIcon: Icon(Icons.settings),
                   label: '设置',
@@ -182,26 +189,28 @@ class _MainScreenState extends State<MainScreen> {
       );
     }
 
+    final scoreRes = widget.engine.getNodeScore(node.id);
+    final scoreColor = ProgressColorHelper.getScoreColor(scoreRes.score);
+    final scoreBgColor = ProgressColorHelper.getScoreBgColor(scoreRes.score);
+
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
           decoration: BoxDecoration(
-            color: ProgressColorHelper.getBgColor(node.progress),
+            color: scoreBgColor,
             borderRadius: BorderRadius.circular(4),
             border: Border.all(
-              color: ProgressColorHelper.getColor(
-                node.progress,
-              ).withValues(alpha: 0.5),
+              color: scoreColor.withValues(alpha: 0.35),
             ),
           ),
           child: Text(
-            node.progress >= 0 ? '+${node.progress}' : '${node.progress}',
+            '${scoreRes.score.toStringAsFixed(1)}分',
             style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w900,
-              color: ProgressColorHelper.getColor(node.progress),
+              color: scoreColor,
             ),
           ),
         ),
@@ -247,7 +256,7 @@ class _MainScreenState extends State<MainScreen> {
       ];
     }
 
-    // 2. 【点击连线后：显示删除连线按钮与取消按钮】
+    // 2. 点击连线后：显示删除连线按钮与取消按钮
     if (selectedConnection != null) {
       return [
         IconButton(
@@ -266,7 +275,6 @@ class _MainScreenState extends State<MainScreen> {
 
     // 3. 选中节点态
     if (selectedNode != null) {
-      // 【提示块没有详情，不能加减，仅允许编辑、删除与取消】
       if (selectedNode.isPrompt) {
         return [
           IconButton(
@@ -288,7 +296,7 @@ class _MainScreenState extends State<MainScreen> {
         ];
       }
 
-      // 常规节点：保留进度加减、详情入口与取消
+      // 常规节点：保留打卡、详情入口与取消
       return [
         IconButton(
           icon: const Icon(
@@ -356,7 +364,6 @@ class _MainScreenState extends State<MainScreen> {
     return const [];
   }
 
-  /// 连线删除确认弹窗
   void _confirmDeleteConnection(FocusConnection conn) {
     showDialog(
       context: context,
@@ -509,9 +516,8 @@ class _MainScreenState extends State<MainScreen> {
       ),
     );
   }
-// 在 lib/views/main_screen.dart 的 _handleProgressChange 方法中：
 
-Future<void> _handleProgressChange(FocusNodeModel node, int delta) async {
+  Future<void> _handleProgressChange(FocusNodeModel node, int delta) async {
     final shouldPrompt = delta > 0
         ? node.promptNoteOnIncrease
         : node.promptNoteOnDecrease;
@@ -523,7 +529,7 @@ Future<void> _handleProgressChange(FocusNodeModel node, int delta) async {
           nodeTitle: node.title,
           delta: delta,
           attributes: node.numericAttributes,
-          engine: widget.engine, // 传入 engine 用于获取历史标签
+          engine: widget.engine,
         ),
       );
       if (result == null && !mounted) return;
@@ -532,7 +538,7 @@ Future<void> _handleProgressChange(FocusNodeModel node, int delta) async {
           node.id,
           delta,
           note: result.note,
-          tags: result.tags, // 传入选中的标签
+          tags: result.tags,
           attributeDeltas: result.attributeDeltas,
           recordDate: result.date,
         );

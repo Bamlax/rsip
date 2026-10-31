@@ -675,11 +675,20 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
     Map<String, Offset> positions,
   ) {
     final groupNodes = widget.engine.nodes
-        .where((n) => group.nodeIds.contains(n.id))
+        .where((n) => group.nodeIds.contains(n.id) && !n.isPrompt)
         .toList();
 
-    final totalProgress = groupNodes.fold<int>(0, (sum, n) => sum + n.progress);
-    final progColor = ProgressColorHelper.getColor(totalProgress);
+    double avgScore = 0.0;
+    if (groupNodes.isNotEmpty) {
+      final sumScore = groupNodes.fold<double>(
+        0.0,
+        (sum, n) => sum + widget.engine.getNodeScore(n.id).score,
+      );
+      avgScore = sumScore / groupNodes.length;
+    }
+
+    final scoreColor = ProgressColorHelper.getScoreColor(avgScore);
+    final scoreBg = ProgressColorHelper.getScoreBgColor(avgScore);
     final isGroupDragging = _draggingGroupId == group.id;
     final isConnectSelected = group.id == _connectStartId;
 
@@ -697,7 +706,8 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
           if (renderBox != null) {
             _groupDragStartFingerPos = renderBox.globalToLocal(details.globalPosition);
             _groupDragStartPositions = {
-              for (final n in groupNodes) n.id: positions[n.id]!
+              for (final n in widget.engine.nodes.where((n) => group.nodeIds.contains(n.id)))
+                n.id: positions[n.id]!
             };
             setState(() => _draggingGroupId = group.id);
           }
@@ -759,18 +769,18 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                       decoration: BoxDecoration(
-                        color: ProgressColorHelper.getBgColor(totalProgress),
+                        color: scoreBg,
                         borderRadius: BorderRadius.circular(6),
                         border: Border.all(
-                          color: progColor.withValues(alpha: 0.35),
+                          color: scoreColor.withValues(alpha: 0.35),
                         ),
                       ),
                       child: Text(
-                        totalProgress >= 0 ? '+$totalProgress' : '$totalProgress',
+                        '均 ${avgScore.toStringAsFixed(1)}分',
                         style: TextStyle(
                           fontSize: 10,
                           fontWeight: FontWeight.w800,
-                          color: progColor,
+                          color: scoreColor,
                         ),
                       ),
                     ),
@@ -802,15 +812,16 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
     bool isHighlightedGroup,
     bool isDragging,
   ) {
-    final progColor = ProgressColorHelper.getColor(node.progress);
-    final progBg = ProgressColorHelper.getBgColor(node.progress);
-    final solidBgColor = Color.alphaBlend(progBg, AppTheme.surfaceWhite);
+    final scoreRes = widget.engine.getNodeScore(node.id);
+    final scoreColor = ProgressColorHelper.getScoreColor(scoreRes.score);
+    final scoreBg = ProgressColorHelper.getScoreBgColor(scoreRes.score);
+    final solidBgColor = Color.alphaBlend(
+      scoreBg.withValues(alpha: 0.55),
+      AppTheme.surfaceWhite,
+    );
     final isHighlighted = isSelectedSingle || isHighlightedGroup;
 
-    final incTextColor = ProgressColorHelper.getIncreaseColor(node.increaseCount);
-    final incBgColor = ProgressColorHelper.getIncreaseBgColor(node.increaseCount);
-
-    // 判断是否为今日待办活跃节点；若非今日节点或今日已完成，则略透明显示
+    // 非今日排期或今日已填写正/负记录的节点，在树中呈现半透明
     final isActiveToday = widget.engine.isNodeActiveToday(node);
 
     return AnimatedOpacity(
@@ -828,7 +839,7 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
                 ? AppTheme.skyBlue
                 : isHighlighted
                     ? AppTheme.primaryBlue
-                    : progColor.withValues(alpha: 0.55),
+                    : scoreColor.withValues(alpha: 0.55),
             width: 1.5,
           ),
           boxShadow: [
@@ -837,7 +848,7 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
                   ? AppTheme.primaryBlue.withValues(alpha: 0.35)
                   : isHighlighted
                       ? AppTheme.primaryBlue.withValues(alpha: 0.2)
-                      : progColor.withValues(alpha: 0.08),
+                      : scoreColor.withValues(alpha: 0.08),
               blurRadius: (isDragging || isHighlighted) ? 8 : 4,
               offset: const Offset(0, 2),
             ),
@@ -856,37 +867,33 @@ class NodeCanvasViewState extends State<NodeCanvasView> {
                         node.title,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: AppTheme.deepNavy),
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w800,
+                          color: AppTheme.deepNavy,
+                        ),
                       ),
                     ),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-                          decoration: BoxDecoration(
-                            color: incBgColor,
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            '+${node.increaseCount}',
-                            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: incTextColor),
-                          ),
-                        ),
-                        const SizedBox(width: 3),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-                          decoration: BoxDecoration(
-                            color: Colors.red.withValues(alpha: 0.12),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            '-${node.decreaseCount}',
-                            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: Colors.red.shade700),
-                          ),
-                        ),
-                      ],
-                    ),
+                    // 习惯连续性分数徽章替代原本的 +X / -Y
+                    Container(
+  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+  decoration: BoxDecoration(
+    color: scoreBg,
+    borderRadius: BorderRadius.circular(4),
+    border: Border.all(
+      color: scoreColor.withValues(alpha: 0.3),
+      width: 0.8,
+    ),
+  ),
+  child: Text(
+    '${scoreRes.score.toStringAsFixed(1)}分',
+    style: TextStyle(
+      fontSize: 10,
+      fontWeight: FontWeight.w900,
+      color: scoreColor,
+    ),
+  ),
+),
                   ],
                 ),
                 const SizedBox(height: 4),

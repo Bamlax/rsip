@@ -1,3 +1,102 @@
+/// 习惯连续性打分算法参数配置[cite: 1]
+class HabitScoreConfig {
+  int windowSize; // W: 滑动窗口天数 (默认 90)[cite: 1]
+  double tau; // τ: 连续饱和尺度 (默认 14.0)[cite: 1]
+  double gammaBase; // γ_base: 基础能量保留率 (默认 0.85)[cite: 1]
+  double kDrop; // k_drop: 连击衰减斜率 (默认 0.005)[cite: 1]
+  double gammaMin; // γ_min: 保留率下限保底 (默认 0.35)[cite: 1]
+  double powerP; // p: 分段幂次 (默认 1.5)[cite: 1]
+  int coldStartK; // K: 冷启动常数 (默认 7)[cite: 1]
+  double weightR; // w_R: 短期势能权重 (默认 0.60, w_H = 1 - w_R = 0.40)[cite: 1]
+
+  HabitScoreConfig({
+    this.windowSize = 90,
+    this.tau = 14.0,
+    this.gammaBase = 0.85,
+    this.kDrop = 0.005,
+    this.gammaMin = 0.35,
+    this.powerP = 1.5,
+    this.coldStartK = 7,
+    this.weightR = 0.60,
+  });
+
+  double get weightH => (1.0 - weightR).clamp(0.0, 1.0);
+
+  Map<String, dynamic> toJson() => {
+        'windowSize': windowSize,
+        'tau': tau,
+        'gammaBase': gammaBase,
+        'kDrop': kDrop,
+        'gammaMin': gammaMin,
+        'powerP': powerP,
+        'coldStartK': coldStartK,
+        'weightR': weightR,
+      };
+
+  factory HabitScoreConfig.fromJson(Map<String, dynamic> json) =>
+      HabitScoreConfig(
+        windowSize: (json['windowSize'] as num?)?.toInt() ?? 90,
+        tau: (json['tau'] as num?)?.toDouble() ?? 14.0,
+        gammaBase: (json['gammaBase'] as num?)?.toDouble() ?? 0.85,
+        kDrop: (json['kDrop'] as num?)?.toDouble() ?? 0.005,
+        gammaMin: (json['gammaMin'] as num?)?.toDouble() ?? 0.35,
+        powerP: (json['powerP'] as num?)?.toDouble() ?? 1.5,
+        coldStartK: (json['coldStartK'] as num?)?.toInt() ?? 7,
+        weightR: (json['weightR'] as num?)?.toDouble() ?? 0.60,
+      );
+
+  HabitScoreConfig copy() => HabitScoreConfig(
+        windowSize: windowSize,
+        tau: tau,
+        gammaBase: gammaBase,
+        kDrop: kDrop,
+        gammaMin: gammaMin,
+        powerP: powerP,
+        coldStartK: coldStartK,
+        weightR: weightR,
+      );
+}
+
+/// 单个节点的打分评估结果[cite: 1]
+class NodeScoreResult {
+  final double score; // 总分 S ∈ [0, 100][cite: 1]
+  final double energy; // 当前连续能量 E_t[cite: 1]
+  final int streak; // 当前连续天数 c[cite: 1]
+  final int lastBrokenStreak; // 最近一次断签前的连击天数 c_prev[cite: 1]
+  final double rValue; // 当前连续势能指标 R ∈ [0, 1][cite: 1]
+  final double hValue; // 历史结构质量指标 H ∈ [0, 1][cite: 1]
+  final bool justBrokeStreak; // 最近一次结算是否为长连击断签
+
+  const NodeScoreResult({
+    this.score = 0.0,
+    this.energy = 0.0,
+    this.streak = 0,
+    this.lastBrokenStreak = 0,
+    this.rValue = 0.0,
+    this.hValue = 0.0,
+    this.justBrokeStreak = false,
+  });
+
+  /// 分数区间梯队名称[cite: 1]
+  String get stageName {
+    if (score >= 85.0) return '巅峰期';
+    if (score >= 60.0) return '巩固期';
+    if (score >= 30.0) return '成长期';
+    return '起步期';
+  }
+
+  /// 分数区间状态文案与断签挽回激励[cite: 1]
+  String get stageTip {
+    if (justBrokeStreak && lastBrokenStreak >= 3 && energy > 0.5) {
+      return '虽然势能受损，但你的自律底座依然扎实，坚持打卡 3 天即可挽回大部分势能！'; //[cite: 1]
+    }
+    if (score >= 85.0) return '点亮巅峰徽章！注意一旦断签将扣减大量势能'; //[cite: 1]
+    if (score >= 60.0) return '当前自律结构良好，继续保持稳定节奏'; //[cite: 1]
+    if (score >= 30.0) return '渐入佳境，连续打卡将显著拉升分数'; //[cite: 1]
+    return '正在生根，每一次打卡都在积蓄初始势能'; //[cite: 1]
+  }
+}
+
 /// 国策的数字属性定义与累计值
 class NumericAttribute {
   final String id;
@@ -83,12 +182,11 @@ class FocusNodeModel {
   bool promptNoteOnIncrease;
   bool promptNoteOnDecrease;
 
-  // 重复规则配置
-  // repeatMode: 0 = 周一至周日自选 (全选即为每天), 1 = 周期/频次 (每x天/每周x次/每月x次)
+  // 重复排期规则：mode 0 为按星期，mode 1 为按频次
   int repeatMode;
   List<int> repeatWeekdays; // 1(周一) ~ 7(周日)
-  int repeatFreqType; // 0 = 每x天, 1 = 每周x次, 2 = 每月x次
-  int repeatFreqValue; // x 的值
+  int repeatFreqType; // 0: 每x天, 1: 每周x次, 2: 每月x次
+  int repeatFreqValue; // x 的取值
 
   List<NumericAttribute>? _numericAttributes;
   List<NumericAttribute> get numericAttributes => _numericAttributes ??= [];
@@ -124,7 +222,6 @@ class FocusNodeModel {
         _numericAttributes = numericAttributes ?? [],
         createdAt = createdAt ?? DateTime.now();
 
-  /// 生成可读的重复规则描述文本
   static String formatRepeatRule({
     required int mode,
     required List<int> weekdays,
@@ -147,7 +244,7 @@ class FocusNodeModel {
     }
   }
 
-  /// 生成可读的重复规则描述文本
+  /// 获取当前重复规则的可读描述
   String get repeatDescription => formatRepeatRule(
         mode: repeatMode,
         weekdays: repeatWeekdays,
@@ -289,8 +386,8 @@ class ProgressRecord {
   final String? newTitle;
   final String? oldContent;
   final String? newContent;
-  final String? oldRepeatDesc; // 新增：修改前的重复规则描述
-  final String? newRepeatDesc; // 新增：修改后的重复规则描述
+  final String? oldRepeatDesc;
+  final String? newRepeatDesc;
   final List<AttributeChange>? attributeChanges;
   final DateTime time;
 

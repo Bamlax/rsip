@@ -93,7 +93,7 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
           '确认删除此打卡记录？',
           style: TextStyle(color: AppTheme.deepNavy, fontWeight: FontWeight.bold),
         ),
-        content: const Text('删除后将撤回该次打卡记录，并同步更新进度与属性统计。'),
+        content: const Text('删除后将撤回该次打卡记录，并重新计算习惯连续性得分与属性统计。'),
         actions: [
           TextButton(
             child: const Text('取消', style: TextStyle(color: Colors.black45)),
@@ -138,7 +138,9 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
         final nodeHistory = widget.engine.history.where((r) => r.nodeId == node!.id).toList();
         nodeHistory.sort((a, b) => b.time.compareTo(a.time));
 
-        final progColor = ProgressColorHelper.getColor(node.progress);
+        final scoreRes = widget.engine.getNodeScore(node.id);
+        final scoreColor = ProgressColorHelper.getScoreColor(scoreRes.score);
+        final scoreBg = ProgressColorHelper.getScoreBgColor(scoreRes.score);
 
         return Scaffold(
           backgroundColor: AppTheme.bgCanvas,
@@ -171,7 +173,7 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
           body: ListView(
             padding: const EdgeInsets.only(top: 0, bottom: 24),
             children: [
-              // 1. 顶部统计大卡片
+              // 1. 顶部核心看板：习惯连续性打分与势能指标
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
                 decoration: const BoxDecoration(
@@ -200,23 +202,63 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
                     Row(
                       children: [
                         _buildMetricTile(
-                          label: '净进度',
-                          value: node.progress >= 0 ? '+${node.progress}' : '${node.progress}',
-                          valColor: progColor,
+                          label: '习惯得分', // 移除时期后缀
+                          value: '${scoreRes.score.toStringAsFixed(1)} 分',
+                          valColor: scoreColor,
                         ),
                         const SizedBox(width: 8),
                         _buildMetricTile(
-                          label: '增加次数',
-                          value: '+${node.increaseCount}',
-                          valColor: ProgressColorHelper.getIncreaseColor(node.increaseCount),
+                          label: '当前连续天数',
+                          value: '${scoreRes.streak} 天',
+                          valColor: AppTheme.primaryBlue,
                         ),
                         const SizedBox(width: 8),
                         _buildMetricTile(
-                          label: '减少次数',
-                          value: '-${node.decreaseCount}',
-                          valColor: Colors.red.shade700,
+                          label: '连续势能 E',
+                          value: scoreRes.energy.toStringAsFixed(1),
+                          valColor: Colors.teal.shade700,
                         ),
                       ],
+                    ),
+                    const SizedBox(height: 10),
+
+                    // 仅保留干净的 R / H 与排期规则信息，移除“正在生根”等提示文案
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: scoreBg.withValues(alpha: 0.45),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: scoreColor.withValues(alpha: 0.25)),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            '短期冲劲 R: ${(scoreRes.rValue * 100).toStringAsFixed(0)}%',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: AppTheme.deepNavy,
+                            ),
+                          ),
+                          Text(
+                            '长期质量 H: ${(scoreRes.hValue * 100).toStringAsFixed(0)}%',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: AppTheme.deepNavy,
+                            ),
+                          ),
+                          Text(
+                            '规则: ${node.repeatDescription}',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: Colors.black54,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
 
                     if (node.numericAttributes.isNotEmpty) ...[
@@ -417,17 +459,18 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
               Text(
                 record.isEdit
                     ? '版本修订'
-                    : '净值 ${record.resultProgress >= 0 ? "+${record.resultProgress}" : record.resultProgress}',
+                    : (isGain ? '打卡完成' : '断签反思'),
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w800,
-                  color: record.isEdit ? AppTheme.primaryBlue : ProgressColorHelper.getColor(record.resultProgress),
+                  color: record.isEdit
+                      ? AppTheme.primaryBlue
+                      : (isGain ? Colors.green.shade700 : Colors.red.shade700),
                 ),
               ),
             ],
           ),
 
-          // 1. 内容修改差异比对（删除内容划红线）
           if (record.isEdit && (record.oldContent != null || record.newContent != null)) ...[
             const SizedBox(height: 8),
             Container(
@@ -448,7 +491,6 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
             ),
           ],
 
-          // 2. 重复规则修改对比呈现（旧规则划红线，新规则高亮）
           if (record.isEdit &&
               record.oldRepeatDesc != null &&
               record.newRepeatDesc != null &&
@@ -495,7 +537,6 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
             ),
           ],
 
-          // 3. 属性修改与删除对比
           if (record.isEdit &&
               record.attributeChanges != null &&
               record.attributeChanges!.isNotEmpty) ...[
@@ -603,7 +644,6 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
             }),
           ],
 
-          // 常规打卡心得
           if (!record.isEdit && record.note != null && record.note!.isNotEmpty) ...[
             const SizedBox(height: 8),
             Container(
@@ -624,7 +664,6 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
             ),
           ],
 
-          // 展示标签
           if (record.tags != null && record.tags!.isNotEmpty) ...[
             const SizedBox(height: 6),
             Wrap(
@@ -654,7 +693,6 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
             ),
           ],
 
-          // 数值属性
           if (record.attributeDeltas != null && record.attributeDeltas!.isNotEmpty) ...[
             const SizedBox(height: 8),
             Wrap(

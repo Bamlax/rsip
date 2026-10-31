@@ -16,7 +16,6 @@ class NodeListView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final allNormalNodes = engine.nodes.where((n) => !n.isPrompt).toList();
-    // 仅展示今日排期且今日尚未完成的节点
     final visibleNodes = allNormalNodes.where((n) => engine.isNodeActiveToday(n)).toList();
 
     if (visibleNodes.isEmpty) {
@@ -32,12 +31,12 @@ class NodeListView extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Text(
-              hasNodes ? '今日待办国策已全部完成' : '暂无国策节点',
+              hasNodes ? '今日待办国策已全部记录' : '暂无国策节点',
               style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: AppTheme.deepNavy),
             ),
             const SizedBox(height: 4),
             Text(
-              hasNodes ? '已完成或非今日排期的节点可在「树」界面查看' : '点击右下角按钮添加国策，长按可上下拖拽排序',
+              hasNodes ? '已记录或非今日排期的节点可在「树」界面查看' : '点击右下角按钮添加国策，长按可上下拖拽排序',
               style: const TextStyle(fontSize: 12, color: Colors.black38),
             ),
           ],
@@ -75,8 +74,9 @@ class NodeListView extends StatelessWidget {
 
   Widget _buildSeamlessNodeRow(FocusNodeModel node) {
     final isSelected = node.id == engine.selectedNodeId;
-    final increaseTextColor = ProgressColorHelper.getIncreaseColor(node.increaseCount);
-    final increaseBgColor = ProgressColorHelper.getIncreaseBgColor(node.increaseCount);
+    final scoreRes = engine.getNodeScore(node.id);
+    final scoreColor = ProgressColorHelper.getScoreColor(scoreRes.score);
+    final scoreBgColor = ProgressColorHelper.getScoreBgColor(scoreRes.score);
     final repeatDesc = node.repeatDescription;
 
     return InkWell(
@@ -127,41 +127,25 @@ class NodeListView extends StatelessWidget {
                     ],
                   ),
                 ),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
-                      decoration: BoxDecoration(
-                        color: increaseBgColor,
-                        borderRadius: BorderRadius.circular(5),
-                      ),
-                      child: Text(
-                        '+${node.increaseCount}',
-                        style: TextStyle(
-                          color: increaseTextColor,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
+                // 仅显示分数胶囊
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: scoreBgColor,
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(
+                      color: scoreColor.withValues(alpha: 0.35),
+                      width: 0.8,
                     ),
-                    const SizedBox(width: 4),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
-                      decoration: BoxDecoration(
-                        color: Colors.red.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(5),
-                      ),
-                      child: Text(
-                        '-${node.decreaseCount}',
-                        style: TextStyle(
-                          color: Colors.red.shade700,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
+                  ),
+                  child: Text(
+                    '${scoreRes.score.toStringAsFixed(1)}分',
+                    style: TextStyle(
+                      color: scoreColor,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w900,
                     ),
-                  ],
+                  ),
                 ),
               ],
             ),

@@ -1,3 +1,5 @@
+import 'package:package_info_plus/package_info_plus.dart';
+
 /// 版本发布记录模型
 class VersionRelease {
   final String version;
@@ -11,12 +13,40 @@ class VersionRelease {
   });
 }
 
-/// 版本历史集中数据（便于后续在此手动增删改）
+/// 版本历史集中数据
 class VersionHistoryConfig {
-  static const String currentVersion = '0.1.0';
+  // 默认以 releases 最前面的一条最新版本兜底
+  static String _currentVersion = releases.first.version;
+
+  /// 获取当前版本号（自动读取 pubspec.yaml 中的 version）
+  static String get currentVersion => _currentVersion;
+
+  /// 在 main.dart 启动时调用，自动从原生平台读取 pubspec.yaml 的版本信息
+  static Future<void> init() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      if (info.version.isNotEmpty) {
+        _currentVersion = info.version;
+      }
+    } catch (_) {
+      // 平台通道不可用时，安全回退至最新的发版记录
+      _currentVersion = releases.first.version;
+    }
+  }
 
   static const List<VersionRelease> releases = [
       VersionRelease(
+      version: '0.6.0',
+      releaseDate: '2026-10-31',
+      changeLogs: [
+        '新增：分数功能',
+        '新增：重置数据功能',
+        '新增：统计界面',
+        '优化：当日负面打卡也自动隐藏',
+        '修复：设置界面版本号错误显示的bug',
+      ],
+    ),
+    VersionRelease(
       version: '0.5.0',
       releaseDate: '2026-10-17',
       changeLogs: [
@@ -24,7 +54,7 @@ class VersionHistoryConfig {
         '新增：列表节点自动隐藏功能以及树的半透明显示',
       ],
     ),
-      VersionRelease(
+    VersionRelease(
       version: '0.4.0',
       releaseDate: '2026-10-12',
       changeLogs: [
@@ -35,7 +65,7 @@ class VersionHistoryConfig {
         '优化：备注内容不在首页显示',
       ],
     ),
-      VersionRelease(
+    VersionRelease(
       version: '0.3.0',
       releaseDate: '2026-10-11',
       changeLogs: [
@@ -44,7 +74,7 @@ class VersionHistoryConfig {
         '优化：历史界面UI',
       ],
     ),
-      VersionRelease(
+    VersionRelease(
       version: '0.2.0',
       releaseDate: '2026-10-08',
       changeLogs: [

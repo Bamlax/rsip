@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/focus_node_model.dart';
@@ -16,8 +17,10 @@ class RsipEngine extends ChangeNotifier {
   final Set<String> _groupSelectedNodeIds = {};
 
   int _dayStartHourOffset = 0;
+  HabitScoreConfig _scoreConfig = HabitScoreConfig();
 
   int get dayStartHourOffset => _dayStartHourOffset;
+  HabitScoreConfig get scoreConfig => _scoreConfig;
   List<FocusNodeModel> get nodes => List.unmodifiable(_nodes);
   Set<FocusConnection> get connections => Set.unmodifiable(_connections);
   List<FocusGroupModel> get groups => List.unmodifiable(_groups);
@@ -46,12 +49,18 @@ class RsipEngine extends ChangeNotifier {
   static const String _keyGroups = 'rsip_groups_data';
   static const String _keyHistory = 'rsip_history_data';
   static const String _keyDayOffset = 'rsip_day_start_hour_offset';
+  static const String _keyScoreConfig = 'rsip_habit_score_config';
 
   Future<void> _loadFromStorage() async {
     try {
       final prefs = await SharedPreferences.getInstance();
 
       _dayStartHourOffset = prefs.getInt(_keyDayOffset) ?? 0;
+
+      final scoreCfgJson = prefs.getString(_keyScoreConfig);
+      if (scoreCfgJson != null) {
+        _scoreConfig = HabitScoreConfig.fromJson(jsonDecode(scoreCfgJson));
+      }
 
       final nodesJson = prefs.getString(_keyNodes);
       if (nodesJson != null) {
@@ -108,9 +117,221 @@ class RsipEngine extends ChangeNotifier {
         jsonEncode(_history.map((h) => h.toJson()).toList()),
       );
       await prefs.setInt(_keyDayOffset, _dayStartHourOffset);
+      await prefs.setString(_keyScoreConfig, jsonEncode(_scoreConfig.toJson()));
     } catch (e) {
       debugPrint('保存到本地存储失败: $e');
     }
+  }
+
+  // ==========================================
+  // 习惯连续性打分算法 (0 ~ 100 分)
+  // ==========================================
+
+  void updateScoreConfig(HabitScoreConfig newConfig) {
+    _scoreConfig = newConfig;
+    notifyListeners();
+    _saveToStorage();
+  }
+
+  void resetScoreConfigToDefault() {
+    _scoreConfig = HabitScoreConfig();
+    notifyListeners();
+    _saveToStorage();
+  }
+
+  /// 计算单个节点的 0~100 习惯连续性健康度得分
+  NodeScoreResult getNodeScore(String nodeId) {
+    final nodeIndex = _nodes.indexWhere((n) => n.id == nodeId);
+    if (nodeIndex == -1) return const NodeScoreResult();
+    final node = _nodes[nodeIndex];
+    if (node.isPrompt) return const NodeScoreResult();
+
+    final today = getEffectiveDate(DateTime.now());
+    final nodeRecords = _history
+        .where((r) => !r.isEdit && r.nodeId == nodeId && r.delta != 0)
+        .toList();
+
+    // 聚合每一天的净打卡表现：key 为 YYYY-MM-DD，value > 0 表示完成，<= 0 表示负向/断签
+    final Map<DateTime, int> dailyNetDelta = {};
+    DateTime? earliestRecordDate;
+
+    for (final r in nodeRecords) {
+      final d = getEffectiveDate(r.time);
+      dailyNetDelta[d] = (dailyNetDelta[d] ?? 0) + r.delta;
+      if (earliestRecordDate == null || d.isBefore(earliestRecordDate)) {
+        earliestRecordDate = d;
+      }
+    }
+
+    final createdDate = getEffectiveDate(node.createdAt);
+    DateTime startDate = createdDate;
+    if (earliestRecordDate != null && earliestRecordDate.isBefore(startDate)) {
+      startDate = earliestRecordDate;
+    }
+
+    // 如果尚未有任何记录且今天刚创建，直接返回 0 分
+    if (nodeRecords.isEmpty && !startDate.isBefore(today)) {
+      return const NodeScoreResult();
+    }
+
+    double energy = 0.0;
+    int streak = 0;
+    int lastBrokenStreak = 0;
+    bool justBroke = false;
+    final List<int> windowEvents = [];
+    final List<DateTime> completedDatesHistory = [];
+
+    // 从起始日期逐日流转至今日（支持跨天懒结算与历史补签自动重滚）
+    for (DateTime d = startDate;
+        !d.isAfter(today);
+        d = DateTime(d.year, d.month, d.day + 1)) {
+      final hasRecordOnDay = dailyNetDelta.containsKey(d);
+      final isToday = _isSameDay(d, today);
+
+      // 4.3 跨天休眠与当日等待逻辑：若今天尚未填写任何正负记录，则处于等待状态，暂不扣减势能
+      if (isToday && !hasRecordOnDay) {
+        break;
+      }
+
+      if (hasRecordOnDay) {
+        final net = dailyNetDelta[d]!;
+        if (net > 0) {
+          // x_t == 1 完成
+          streak += 1;
+          energy += 1.0;
+          justBroke = false;
+          windowEvents.add(1);
+          completedDatesHistory.add(d);
+        } else {
+          // 显式记录负面内容 -> x_t == 0 断签
+          lastBrokenStreak = streak;
+          streak = 0;
+          final gamma = math.max(
+            _scoreConfig.gammaMin,
+            _scoreConfig.gammaBase - (_scoreConfig.kDrop * lastBrokenStreak),
+          );
+          energy = energy * gamma;
+          justBroke = true;
+          windowEvents.add(0);
+        }
+      } else {
+        // 历史未打卡日 (d < today)：检查当天是否为该节点的排期日
+        final wasScheduled = _wasNodeScheduledOnDate(node, d, completedDatesHistory);
+        if (wasScheduled) {
+          lastBrokenStreak = streak;
+          streak = 0;
+          final gamma = math.max(
+            _scoreConfig.gammaMin,
+            _scoreConfig.gammaBase - (_scoreConfig.kDrop * lastBrokenStreak),
+          );
+          energy = energy * gamma;
+          justBroke = true;
+          windowEvents.add(0);
+        }
+      }
+    }
+
+    if (windowEvents.isEmpty) {
+      return const NodeScoreResult();
+    }
+
+    // 截取最近 W 个评估周期的滑动窗口
+    final int wLimit = _scoreConfig.windowSize.clamp(1, 1000);
+    final List<int> recentWindow = windowEvents.length > wLimit
+        ? windowEvents.sublist(windowEvents.length - wLimit)
+        : windowEvents;
+
+    final int nW = recentWindow.length;
+
+    // 1.1 计算当前连续势能指标 R = 1 - exp(-E_t / τ)
+    final double tau = _scoreConfig.tau <= 0.1 ? 14.0 : _scoreConfig.tau;
+    final double rVal = (1.0 - math.exp(-energy / tau)).clamp(0.0, 1.0);
+
+    // 1.2 切分滑动窗口内所有连续段长度 {len_1, len_2, ..., len_m}，计算历史结构质量指标 H
+    double sumPow = 0.0;
+    int currentRun = 0;
+    final double p = _scoreConfig.powerP;
+    for (final x in recentWindow) {
+      if (x == 1) {
+        currentRun += 1;
+      } else {
+        if (currentRun > 0) {
+          sumPow += math.pow(currentRun, p).toDouble();
+          currentRun = 0;
+        }
+      }
+    }
+    if (currentRun > 0) {
+      sumPow += math.pow(currentRun, p).toDouble();
+    }
+
+    final double denom = math.pow(nW + _scoreConfig.coldStartK, p).toDouble();
+    final double hVal = denom > 0 ? (sumPow / denom).clamp(0.0, 1.0) : 0.0;
+
+    // 计算总分 S = 100 * (w_R * R + w_H * H)
+    final double totalScore = (100.0 *
+            (_scoreConfig.weightR * rVal + _scoreConfig.weightH * hVal))
+        .clamp(0.0, 100.0);
+
+    return NodeScoreResult(
+      score: totalScore,
+      energy: energy,
+      streak: streak,
+      lastBrokenStreak: lastBrokenStreak,
+      rValue: rVal,
+      hValue: hVal,
+      justBrokeStreak: justBroke,
+    );
+  }
+
+  /// 辅助判断历史某一天 d 是否属于该节点的应打卡排期日
+  bool _wasNodeScheduledOnDate(
+    FocusNodeModel node,
+    DateTime d,
+    List<DateTime> completedBeforeD,
+  ) {
+    if (node.repeatMode == 0) {
+      return node.repeatWeekdays.contains(d.weekday);
+    } else {
+      final freqVal = node.repeatFreqValue.clamp(1, 365);
+      if (node.repeatFreqType == 0) {
+        if (freqVal <= 1) return true;
+        if (completedBeforeD.isEmpty) return true;
+        final lastDate = completedBeforeD.last;
+        return d.difference(lastDate).inDays >= freqVal;
+      } else if (node.repeatFreqType == 1) {
+        final weekStart = d.subtract(Duration(days: d.weekday - 1));
+        final countInWeek =
+            completedBeforeD.where((dt) => !dt.isBefore(weekStart)).length;
+        return countInWeek < freqVal;
+      } else {
+        final monthStart = DateTime(d.year, d.month, 1);
+        final countInMonth =
+            completedBeforeD.where((dt) => !dt.isBefore(monthStart)).length;
+        return countInMonth < freqVal;
+      }
+    }
+  }
+
+  // ==========================================
+  // 清空历史填充数据（保留应用版本号与节点版本号）
+  // ==========================================
+
+  Future<void> clearAllHistoryData() async {
+    // 清空所有历史打卡记录，但保留节点当前的 version 版本号
+    _history.clear();
+    for (final node in _nodes) {
+      node.progress = 0;
+      node.increaseCount = 0;
+      node.decreaseCount = 0;
+      node.latestNote = null;
+      for (final attr in node.numericAttributes) {
+        attr.totalValue = 0.0;
+        attr.count = 0;
+      }
+    }
+    notifyListeners();
+    await _saveToStorage();
   }
 
   // ==========================================
@@ -123,7 +344,6 @@ class RsipEngine extends ChangeNotifier {
     _saveToStorage();
   }
 
-  /// 计算归属日期（若已是日历选择器生成的零点纯日期则直接返回，否则扣除延后小时）
   DateTime getEffectiveDate(DateTime dt) {
     if (dt.hour == 0 && dt.minute == 0 && dt.second == 0 && dt.millisecond == 0) {
       return DateTime(dt.year, dt.month, dt.day);
@@ -141,14 +361,14 @@ class RsipEngine extends ChangeNotifier {
     return a.year == b.year && a.month == b.month && a.day == b.day;
   }
 
-  /// 判断节点在今天是否已经打卡完成（存在今日的正向记录）
+  /// 判断节点在今天是否已经填写过记录（无论正向增加还是负向减少，当天均隐藏）
   bool isNodeCompletedToday(FocusNodeModel node) {
     if (node.isPrompt) return false;
     final today = getEffectiveDate(DateTime.now());
     return _history.any((r) =>
         !r.isEdit &&
         r.nodeId == node.id &&
-        r.delta > 0 &&
+        r.delta != 0 &&
         _isSameDay(getEffectiveDate(r.time), today));
   }
 
@@ -158,16 +378,14 @@ class RsipEngine extends ChangeNotifier {
     final today = getEffectiveDate(DateTime.now());
 
     if (node.repeatMode == 0) {
-      // 模式 0：周一到周日自选
       return node.repeatWeekdays.contains(today.weekday);
     } else {
       final freqVal = node.repeatFreqValue.clamp(1, 365);
       if (node.repeatFreqType == 0) {
-        // 每 X 天
         if (freqVal <= 1) return true;
         DateTime? lastDate;
         for (final r in _history) {
-          if (!r.isEdit && r.nodeId == node.id && r.delta > 0) {
+          if (!r.isEdit && r.nodeId == node.id && r.delta != 0) {
             final d = getEffectiveDate(r.time);
             if (d.isBefore(today)) {
               if (lastDate == null || d.isAfter(lastDate)) {
@@ -179,7 +397,6 @@ class RsipEngine extends ChangeNotifier {
         if (lastDate == null) return true;
         return today.difference(lastDate).inDays >= freqVal;
       } else if (node.repeatFreqType == 1) {
-        // 每周 X 次（统计本周一至今日之前的完成次数）
         final weekStart = today.subtract(Duration(days: today.weekday - 1));
         int countBeforeToday = 0;
         for (final r in _history) {
@@ -192,7 +409,6 @@ class RsipEngine extends ChangeNotifier {
         }
         return countBeforeToday < freqVal;
       } else {
-        // 每月 X 次（统计本月1号至今日之前的完成次数）
         final monthStart = DateTime(today.year, today.month, 1);
         int countBeforeToday = 0;
         for (final r in _history) {
@@ -208,7 +424,7 @@ class RsipEngine extends ChangeNotifier {
     }
   }
 
-  /// 节点今日是否处于“待办活跃”状态（是今日排期且今日未完成）
+  /// 节点今日是否处于“待办活跃”状态（是今日排期且今日尚未填写任何正负记录）
   bool isNodeActiveToday(FocusNodeModel node) {
     if (node.isPrompt) return true;
     return isNodeScheduledToday(node) && !isNodeCompletedToday(node);
@@ -231,7 +447,7 @@ class RsipEngine extends ChangeNotifier {
   }
 
   // ==========================================
-  // 节点拖拽排序（适配列表过滤后的可见项）
+  // 节点拖拽排序
   // ==========================================
 
   void reorderNodes(int oldIndex, int newIndex) {
@@ -446,7 +662,7 @@ class RsipEngine extends ChangeNotifier {
     final target = _nodes.firstWhere((n) => n.id == id);
     final prevTitle = target.title;
     final prevContent = target.content;
-    final prevRepeatDesc = target.repeatDescription; // 记录修改前的重复规则
+    final prevRepeatDesc = target.repeatDescription;
 
     if (promptNoteOnIncrease != null) {
       target.promptNoteOnIncrease = promptNoteOnIncrease;
@@ -467,7 +683,7 @@ class RsipEngine extends ChangeNotifier {
       target.repeatFreqValue = repeatFreqValue;
     }
 
-    final currentRepeatDesc = target.repeatDescription; // 获取修改后的重复规则
+    final currentRepeatDesc = target.repeatDescription;
 
     if (attributeChanges != null) {
       for (final change in attributeChanges) {
@@ -621,6 +837,8 @@ class RsipEngine extends ChangeNotifier {
       newTitle: oldRecord.newTitle,
       oldContent: oldRecord.oldContent,
       newContent: oldRecord.newContent,
+      oldRepeatDesc: oldRecord.oldRepeatDesc,
+      newRepeatDesc: oldRecord.newRepeatDesc,
       attributeChanges: oldRecord.attributeChanges,
       time: newDate,
     );
