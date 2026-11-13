@@ -202,7 +202,7 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
                     Row(
                       children: [
                         _buildMetricTile(
-                          label: '习惯得分', // 移除时期后缀
+                          label: '习惯得分',
                           value: '${scoreRes.score.toStringAsFixed(1)} 分',
                           valColor: scoreColor,
                         ),
@@ -222,7 +222,6 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
                     ),
                     const SizedBox(height: 10),
 
-                    // 仅保留干净的 R / H 与排期规则信息，移除“正在生根”等提示文案
                     Container(
                       width: double.infinity,
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -232,7 +231,7 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
                         border: Border.all(color: scoreColor.withValues(alpha: 0.25)),
                       ),
                       child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        mainAxisAlignment: MainAxisAlignment.spaceAround,
                         children: [
                           Text(
                             '短期冲劲 R: ${(scoreRes.rValue * 100).toStringAsFixed(0)}%',
@@ -248,13 +247,6 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
                               fontSize: 11,
                               fontWeight: FontWeight.w700,
                               color: AppTheme.deepNavy,
-                            ),
-                          ),
-                          Text(
-                            '规则: ${node.repeatDescription}',
-                            style: const TextStyle(
-                              fontSize: 11,
-                              color: Colors.black54,
                             ),
                           ),
                         ],
@@ -486,52 +478,6 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
                     record.oldContent ?? '',
                     record.newContent ?? '',
                   ),
-                ),
-              ),
-            ),
-          ],
-
-          if (record.isEdit &&
-              record.oldRepeatDesc != null &&
-              record.newRepeatDesc != null &&
-              record.oldRepeatDesc != record.newRepeatDesc) ...[
-            const SizedBox(height: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.7),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: RichText(
-                text: TextSpan(
-                  children: [
-                    const TextSpan(
-                      text: '重复规则: ',
-                      style: TextStyle(fontSize: 11, color: Colors.black45),
-                    ),
-                    TextSpan(
-                      text: record.oldRepeatDesc!,
-                      style: TextStyle(
-                        fontSize: 12,
-                        decoration: TextDecoration.lineThrough,
-                        decorationColor: Colors.red.shade400,
-                        decorationThickness: 2.0,
-                        color: Colors.red.shade400,
-                      ),
-                    ),
-                    const TextSpan(
-                      text: ' ➔ ',
-                      style: TextStyle(fontSize: 12, color: Colors.black38),
-                    ),
-                    TextSpan(
-                      text: record.newRepeatDesc!,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: AppTheme.primaryBlue,
-                      ),
-                    ),
-                  ],
                 ),
               ),
             ),

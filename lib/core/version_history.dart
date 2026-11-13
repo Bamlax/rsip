@@ -36,6 +36,22 @@ class VersionHistoryConfig {
 
   static const List<VersionRelease> releases = [
       VersionRelease(
+      version: '0.7.1',
+      releaseDate: '2026-11-12',
+      changeLogs: [
+        '优化：重复功能暂时删除',
+        '优化：树界面的提示节点ui',
+      ],
+    ),
+      VersionRelease(
+      version: '0.7.0',
+      releaseDate: '2026-11-4',
+      changeLogs: [
+        '新增：归档功能',
+        '优化：打卡完成现在会自动隐藏',
+      ],
+    ),
+      VersionRelease(
       version: '0.6.0',
       releaseDate: '2026-10-31',
       changeLogs: [

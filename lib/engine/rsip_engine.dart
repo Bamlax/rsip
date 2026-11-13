@@ -16,6 +16,10 @@ class RsipEngine extends ChangeNotifier {
   bool _isGroupSelectMode = false;
   final Set<String> _groupSelectedNodeIds = {};
 
+  // 归档选择模式状态
+  bool _isArchiveMode = false;
+  final Set<String> _archiveSelectedIds = {};
+
   int _dayStartHourOffset = 0;
   HabitScoreConfig _scoreConfig = HabitScoreConfig();
 
@@ -40,9 +44,16 @@ class RsipEngine extends ChangeNotifier {
   bool get isGroupSelectMode => _isGroupSelectMode;
   Set<String> get groupSelectedNodeIds => Set.unmodifiable(_groupSelectedNodeIds);
 
+  bool get isArchiveMode => _isArchiveMode;
+  Set<String> get archiveSelectedIds => Set.unmodifiable(_archiveSelectedIds);
+
   RsipEngine() {
     _loadFromStorage();
   }
+
+  // ==========================================
+  // 本地持久化 (Storage)
+  // ==========================================
 
   static const String _keyNodes = 'rsip_nodes_data';
   static const String _keyConnections = 'rsip_connections_data';
@@ -139,7 +150,7 @@ class RsipEngine extends ChangeNotifier {
     _saveToStorage();
   }
 
-  /// 计算单个节点的 0~100 习惯连续性健康度得分
+  /// 计算单个节点的 0~100 习惯连续性健康度得分[cite: 1]
   NodeScoreResult getNodeScore(String nodeId) {
     final nodeIndex = _nodes.indexWhere((n) => n.id == nodeId);
     if (nodeIndex == -1) return const NodeScoreResult();
@@ -151,7 +162,6 @@ class RsipEngine extends ChangeNotifier {
         .where((r) => !r.isEdit && r.nodeId == nodeId && r.delta != 0)
         .toList();
 
-    // 聚合每一天的净打卡表现：key 为 YYYY-MM-DD，value > 0 表示完成，<= 0 表示负向/断签
     final Map<DateTime, int> dailyNetDelta = {};
     DateTime? earliestRecordDate;
 
@@ -169,7 +179,6 @@ class RsipEngine extends ChangeNotifier {
       startDate = earliestRecordDate;
     }
 
-    // 如果尚未有任何记录且今天刚创建，直接返回 0 分
     if (nodeRecords.isEmpty && !startDate.isBefore(today)) {
       return const NodeScoreResult();
     }
@@ -179,16 +188,14 @@ class RsipEngine extends ChangeNotifier {
     int lastBrokenStreak = 0;
     bool justBroke = false;
     final List<int> windowEvents = [];
-    final List<DateTime> completedDatesHistory = [];
 
-    // 从起始日期逐日流转至今日（支持跨天懒结算与历史补签自动重滚）
     for (DateTime d = startDate;
         !d.isAfter(today);
         d = DateTime(d.year, d.month, d.day + 1)) {
       final hasRecordOnDay = dailyNetDelta.containsKey(d);
       final isToday = _isSameDay(d, today);
 
-      // 4.3 跨天休眠与当日等待逻辑：若今天尚未填写任何正负记录，则处于等待状态，暂不扣减势能
+      // 当日尚未填写记录：处于等待状态，暂不扣减势能[cite: 1]
       if (isToday && !hasRecordOnDay) {
         break;
       }
@@ -196,14 +203,13 @@ class RsipEngine extends ChangeNotifier {
       if (hasRecordOnDay) {
         final net = dailyNetDelta[d]!;
         if (net > 0) {
-          // x_t == 1 完成
+          // x_t == 1 完成打卡[cite: 1]
           streak += 1;
           energy += 1.0;
           justBroke = false;
           windowEvents.add(1);
-          completedDatesHistory.add(d);
         } else {
-          // 显式记录负面内容 -> x_t == 0 断签
+          // 负面打卡断签：x_t == 0[cite: 1]
           lastBrokenStreak = streak;
           streak = 0;
           final gamma = math.max(
@@ -215,19 +221,16 @@ class RsipEngine extends ChangeNotifier {
           windowEvents.add(0);
         }
       } else {
-        // 历史未打卡日 (d < today)：检查当天是否为该节点的排期日
-        final wasScheduled = _wasNodeScheduledOnDate(node, d, completedDatesHistory);
-        if (wasScheduled) {
-          lastBrokenStreak = streak;
-          streak = 0;
-          final gamma = math.max(
-            _scoreConfig.gammaMin,
-            _scoreConfig.gammaBase - (_scoreConfig.kDrop * lastBrokenStreak),
-          );
-          energy = energy * gamma;
-          justBroke = true;
-          windowEvents.add(0);
-        }
+        // 历史未打卡日 (d < today)：计为断签 x_t == 0[cite: 1]
+        lastBrokenStreak = streak;
+        streak = 0;
+        final gamma = math.max(
+          _scoreConfig.gammaMin,
+          _scoreConfig.gammaBase - (_scoreConfig.kDrop * lastBrokenStreak),
+        );
+        energy = energy * gamma;
+        justBroke = true;
+        windowEvents.add(0);
       }
     }
 
@@ -235,7 +238,7 @@ class RsipEngine extends ChangeNotifier {
       return const NodeScoreResult();
     }
 
-    // 截取最近 W 个评估周期的滑动窗口
+    // 截取最近 W 天的滑动窗口[cite: 1]
     final int wLimit = _scoreConfig.windowSize.clamp(1, 1000);
     final List<int> recentWindow = windowEvents.length > wLimit
         ? windowEvents.sublist(windowEvents.length - wLimit)
@@ -243,11 +246,11 @@ class RsipEngine extends ChangeNotifier {
 
     final int nW = recentWindow.length;
 
-    // 1.1 计算当前连续势能指标 R = 1 - exp(-E_t / τ)
+    // 1.1 短期连续势能指标 R = 1 - exp(-E / τ)[cite: 1]
     final double tau = _scoreConfig.tau <= 0.1 ? 14.0 : _scoreConfig.tau;
     final double rVal = (1.0 - math.exp(-energy / tau)).clamp(0.0, 1.0);
 
-    // 1.2 切分滑动窗口内所有连续段长度 {len_1, len_2, ..., len_m}，计算历史结构质量指标 H
+    // 1.2 历史结构质量指标 H = Σ(len_k ^ p) / (N_W + K) ^ p[cite: 1]
     double sumPow = 0.0;
     int currentRun = 0;
     final double p = _scoreConfig.powerP;
@@ -268,7 +271,7 @@ class RsipEngine extends ChangeNotifier {
     final double denom = math.pow(nW + _scoreConfig.coldStartK, p).toDouble();
     final double hVal = denom > 0 ? (sumPow / denom).clamp(0.0, 1.0) : 0.0;
 
-    // 计算总分 S = 100 * (w_R * R + w_H * H)
+    // 总分 S = 100 * (w_R * R + w_H * H)[cite: 1]
     final double totalScore = (100.0 *
             (_scoreConfig.weightR * rVal + _scoreConfig.weightH * hVal))
         .clamp(0.0, 100.0);
@@ -284,41 +287,11 @@ class RsipEngine extends ChangeNotifier {
     );
   }
 
-  /// 辅助判断历史某一天 d 是否属于该节点的应打卡排期日
-  bool _wasNodeScheduledOnDate(
-    FocusNodeModel node,
-    DateTime d,
-    List<DateTime> completedBeforeD,
-  ) {
-    if (node.repeatMode == 0) {
-      return node.repeatWeekdays.contains(d.weekday);
-    } else {
-      final freqVal = node.repeatFreqValue.clamp(1, 365);
-      if (node.repeatFreqType == 0) {
-        if (freqVal <= 1) return true;
-        if (completedBeforeD.isEmpty) return true;
-        final lastDate = completedBeforeD.last;
-        return d.difference(lastDate).inDays >= freqVal;
-      } else if (node.repeatFreqType == 1) {
-        final weekStart = d.subtract(Duration(days: d.weekday - 1));
-        final countInWeek =
-            completedBeforeD.where((dt) => !dt.isBefore(weekStart)).length;
-        return countInWeek < freqVal;
-      } else {
-        final monthStart = DateTime(d.year, d.month, 1);
-        final countInMonth =
-            completedBeforeD.where((dt) => !dt.isBefore(monthStart)).length;
-        return countInMonth < freqVal;
-      }
-    }
-  }
-
   // ==========================================
-  // 清空历史填充数据（保留应用版本号与节点版本号）
+  // 清空历史填充数据（保留应用与节点版本号）
   // ==========================================
 
   Future<void> clearAllHistoryData() async {
-    // 清空所有历史打卡记录，但保留节点当前的 version 版本号
     _history.clear();
     for (final node in _nodes) {
       node.progress = 0;
@@ -335,7 +308,49 @@ class RsipEngine extends ChangeNotifier {
   }
 
   // ==========================================
-  // 日期归属、排期与今日完成状态判定
+  // 归档管理模式
+  // ==========================================
+
+  void startArchiveMode() {
+    _isArchiveMode = true;
+    _archiveSelectedIds.clear();
+    for (final n in _nodes) {
+      if (n.isArchived) {
+        _archiveSelectedIds.add(n.id);
+      }
+    }
+    _selectedNodeId = null;
+    _selectedConnection = null;
+    notifyListeners();
+  }
+
+  void toggleArchiveSelection(String id) {
+    if (_archiveSelectedIds.contains(id)) {
+      _archiveSelectedIds.remove(id);
+    } else {
+      _archiveSelectedIds.add(id);
+    }
+    notifyListeners();
+  }
+
+  void saveArchiveSelections() {
+    for (final n in _nodes) {
+      n.isArchived = _archiveSelectedIds.contains(n.id);
+    }
+    _isArchiveMode = false;
+    _archiveSelectedIds.clear();
+    notifyListeners();
+    _saveToStorage();
+  }
+
+  void cancelArchiveMode() {
+    _isArchiveMode = false;
+    _archiveSelectedIds.clear();
+    notifyListeners();
+  }
+
+  // ==========================================
+  // 日期归属与当日完成状态判定
   // ==========================================
 
   void setDayStartHourOffset(int hours) {
@@ -361,7 +376,7 @@ class RsipEngine extends ChangeNotifier {
     return a.year == b.year && a.month == b.month && a.day == b.day;
   }
 
-  /// 判断节点在今天是否已经填写过记录（无论正向增加还是负向减少，当天均隐藏）
+  /// 无论是正向打卡还是负面打卡，当天只要填写过，列表自动隐藏
   bool isNodeCompletedToday(FocusNodeModel node) {
     if (node.isPrompt) return false;
     final today = getEffectiveDate(DateTime.now());
@@ -372,62 +387,10 @@ class RsipEngine extends ChangeNotifier {
         _isSameDay(getEffectiveDate(r.time), today));
   }
 
-  /// 判断节点根据重复规则是否排期在今天执行
-  bool isNodeScheduledToday(FocusNodeModel node) {
-    if (node.isPrompt) return true;
-    final today = getEffectiveDate(DateTime.now());
-
-    if (node.repeatMode == 0) {
-      return node.repeatWeekdays.contains(today.weekday);
-    } else {
-      final freqVal = node.repeatFreqValue.clamp(1, 365);
-      if (node.repeatFreqType == 0) {
-        if (freqVal <= 1) return true;
-        DateTime? lastDate;
-        for (final r in _history) {
-          if (!r.isEdit && r.nodeId == node.id && r.delta != 0) {
-            final d = getEffectiveDate(r.time);
-            if (d.isBefore(today)) {
-              if (lastDate == null || d.isAfter(lastDate)) {
-                lastDate = d;
-              }
-            }
-          }
-        }
-        if (lastDate == null) return true;
-        return today.difference(lastDate).inDays >= freqVal;
-      } else if (node.repeatFreqType == 1) {
-        final weekStart = today.subtract(Duration(days: today.weekday - 1));
-        int countBeforeToday = 0;
-        for (final r in _history) {
-          if (!r.isEdit && r.nodeId == node.id && r.delta > 0) {
-            final d = getEffectiveDate(r.time);
-            if (!d.isBefore(weekStart) && d.isBefore(today)) {
-              countBeforeToday++;
-            }
-          }
-        }
-        return countBeforeToday < freqVal;
-      } else {
-        final monthStart = DateTime(today.year, today.month, 1);
-        int countBeforeToday = 0;
-        for (final r in _history) {
-          if (!r.isEdit && r.nodeId == node.id && r.delta > 0) {
-            final d = getEffectiveDate(r.time);
-            if (!d.isBefore(monthStart) && d.isBefore(today)) {
-              countBeforeToday++;
-            }
-          }
-        }
-        return countBeforeToday < freqVal;
-      }
-    }
-  }
-
-  /// 节点今日是否处于“待办活跃”状态（是今日排期且今日尚未填写任何正负记录）
+  /// 节点今日是否处于“待办活跃”状态（今日尚未填写任何正负记录）
   bool isNodeActiveToday(FocusNodeModel node) {
     if (node.isPrompt) return true;
-    return isNodeScheduledToday(node) && !isNodeCompletedToday(node);
+    return !isNodeCompletedToday(node);
   }
 
   // ==========================================
@@ -447,11 +410,13 @@ class RsipEngine extends ChangeNotifier {
   }
 
   // ==========================================
-  // 节点拖拽排序
+  // 节点拖拽排序 (排除已归档节点)
   // ==========================================
 
   void reorderNodes(int oldIndex, int newIndex) {
-    final visible = _nodes.where((n) => !n.isPrompt && isNodeActiveToday(n)).toList();
+    final visible = _nodes
+        .where((n) => !n.isPrompt && !n.isArchived && isNodeActiveToday(n))
+        .toList();
     if (oldIndex < 0 || oldIndex >= visible.length) return;
 
     if (oldIndex < newIndex) {
@@ -584,10 +549,6 @@ class RsipEngine extends ChangeNotifier {
     bool isPrompt = false,
     bool promptNoteOnIncrease = true,
     bool promptNoteOnDecrease = true,
-    int repeatMode = 0,
-    List<int>? repeatWeekdays,
-    int repeatFreqType = 0,
-    int repeatFreqValue = 1,
     List<NumericAttribute>? numericAttributes,
     double? x,
     double? y,
@@ -613,10 +574,6 @@ class RsipEngine extends ChangeNotifier {
       isPrompt: isPrompt,
       promptNoteOnIncrease: promptNoteOnIncrease,
       promptNoteOnDecrease: promptNoteOnDecrease,
-      repeatMode: repeatMode,
-      repeatWeekdays: repeatWeekdays,
-      repeatFreqType: repeatFreqType,
-      repeatFreqValue: repeatFreqValue,
       numericAttributes: numericAttributes,
       x: targetX,
       y: targetY,
@@ -651,10 +608,6 @@ class RsipEngine extends ChangeNotifier {
     String newContent, {
     bool? promptNoteOnIncrease,
     bool? promptNoteOnDecrease,
-    int? repeatMode,
-    List<int>? repeatWeekdays,
-    int? repeatFreqType,
-    int? repeatFreqValue,
     List<NumericAttribute>? numericAttributes,
     List<AttributeChange>? attributeChanges,
     bool recordToHistory = false,
@@ -662,7 +615,6 @@ class RsipEngine extends ChangeNotifier {
     final target = _nodes.firstWhere((n) => n.id == id);
     final prevTitle = target.title;
     final prevContent = target.content;
-    final prevRepeatDesc = target.repeatDescription;
 
     if (promptNoteOnIncrease != null) {
       target.promptNoteOnIncrease = promptNoteOnIncrease;
@@ -670,20 +622,6 @@ class RsipEngine extends ChangeNotifier {
     if (promptNoteOnDecrease != null) {
       target.promptNoteOnDecrease = promptNoteOnDecrease;
     }
-    if (repeatMode != null) {
-      target.repeatMode = repeatMode;
-    }
-    if (repeatWeekdays != null && repeatWeekdays.isNotEmpty) {
-      target.repeatWeekdays = List.from(repeatWeekdays);
-    }
-    if (repeatFreqType != null) {
-      target.repeatFreqType = repeatFreqType;
-    }
-    if (repeatFreqValue != null) {
-      target.repeatFreqValue = repeatFreqValue;
-    }
-
-    final currentRepeatDesc = target.repeatDescription;
 
     if (attributeChanges != null) {
       for (final change in attributeChanges) {
@@ -730,8 +668,6 @@ class RsipEngine extends ChangeNotifier {
           newTitle: newTitle,
           oldContent: prevContent,
           newContent: newContent,
-          oldRepeatDesc: prevRepeatDesc != currentRepeatDesc ? prevRepeatDesc : null,
-          newRepeatDesc: prevRepeatDesc != currentRepeatDesc ? currentRepeatDesc : null,
           attributeChanges: attributeChanges,
           time: DateTime.now(),
         ),
@@ -837,8 +773,6 @@ class RsipEngine extends ChangeNotifier {
       newTitle: oldRecord.newTitle,
       oldContent: oldRecord.oldContent,
       newContent: oldRecord.newContent,
-      oldRepeatDesc: oldRecord.oldRepeatDesc,
-      newRepeatDesc: oldRecord.newRepeatDesc,
       attributeChanges: oldRecord.attributeChanges,
       time: newDate,
     );

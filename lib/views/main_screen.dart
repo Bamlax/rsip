@@ -34,6 +34,7 @@ class _MainScreenState extends State<MainScreen> {
         final selectedNode = widget.engine.selectedNode;
         final selectedConnection = widget.engine.selectedConnection;
         final inGroupMode = widget.engine.isGroupSelectMode;
+        final inArchiveMode = widget.engine.isArchiveMode;
 
         return Scaffold(
           backgroundColor: AppTheme.bgCanvas,
@@ -52,6 +53,25 @@ class _MainScreenState extends State<MainScreen> {
                       const SizedBox(width: 8),
                       Text(
                         '框选模式 (已选 ${widget.engine.groupSelectedNodeIds.length} 个)',
+                        style: const TextStyle(
+                          color: AppTheme.deepNavy,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
+                  )
+                : inArchiveMode
+                ? Row(
+                    children: [
+                      const Icon(
+                        Icons.archive_outlined,
+                        size: 20,
+                        color: AppTheme.primaryBlue,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        '归档管理 (已勾选 ${widget.engine.archiveSelectedIds.length} 项)',
                         style: const TextStyle(
                           color: AppTheme.deepNavy,
                           fontSize: 16,
@@ -95,6 +115,7 @@ class _MainScreenState extends State<MainScreen> {
               selectedNode,
               selectedConnection,
               inGroupMode,
+              inArchiveMode,
             ),
           ),
           body: IndexedStack(
@@ -106,11 +127,14 @@ class _MainScreenState extends State<MainScreen> {
                 isConnectMode: _isConnectMode,
               ),
               HistoryView(engine: widget.engine),
-              StatisticsView(engine: widget.engine), // 索引 3：统计界面
-              SettingsView(engine: widget.engine),   // 索引 4：设置界面
+              StatisticsView(engine: widget.engine),
+              SettingsView(engine: widget.engine),
             ],
           ),
-          floatingActionButton: _currentViewIndex == 0
+          // 列表界面（0）与树界面（1）均显示添加按钮
+          floatingActionButton: ((_currentViewIndex == 0 || _currentViewIndex == 1) &&
+                  !inArchiveMode &&
+                  !inGroupMode)
               ? FloatingActionButton(
                   backgroundColor: AppTheme.primaryBlue,
                   foregroundColor: Colors.white,
@@ -135,6 +159,9 @@ class _MainScreenState extends State<MainScreen> {
                 widget.engine.selectNode(null);
                 widget.engine.selectConnection(null);
                 widget.engine.cancelGroupSelectMode();
+                if (widget.engine.isArchiveMode) {
+                  widget.engine.cancelArchiveMode();
+                }
                 setState(() {
                   _currentViewIndex = idx;
                   if (idx != 1) _isConnectMode = false;
@@ -234,8 +261,38 @@ class _MainScreenState extends State<MainScreen> {
     FocusNodeModel? selectedNode,
     FocusConnection? selectedConnection,
     bool inGroupMode,
+    bool inArchiveMode,
   ) {
-    // 1. 框选模式
+    // 1. 归档打勾选择模式
+    if (inArchiveMode) {
+      return [
+        IconButton(
+          icon: const Icon(
+            Icons.check_circle_rounded,
+            color: AppTheme.primaryBlue,
+            size: 26,
+          ),
+          tooltip: '完成归档',
+          onPressed: () {
+            widget.engine.saveArchiveSelections();
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('归档设置已更新'),
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          },
+        ),
+        IconButton(
+          icon: const Icon(Icons.close, color: Colors.black45),
+          tooltip: '取消',
+          onPressed: () => widget.engine.cancelArchiveMode(),
+        ),
+        const SizedBox(width: 4),
+      ];
+    }
+
+    // 2. 框选模式
     if (inGroupMode) {
       return [
         IconButton(
@@ -256,7 +313,7 @@ class _MainScreenState extends State<MainScreen> {
       ];
     }
 
-    // 2. 点击连线后：显示删除连线按钮与取消按钮
+    // 3. 点击连线选中态
     if (selectedConnection != null) {
       return [
         IconButton(
@@ -264,16 +321,11 @@ class _MainScreenState extends State<MainScreen> {
           tooltip: '删除此连线',
           onPressed: () => _confirmDeleteConnection(selectedConnection),
         ),
-        IconButton(
-          icon: const Icon(Icons.close, color: Colors.black38),
-          tooltip: '取消选中',
-          onPressed: () => widget.engine.selectConnection(null),
-        ),
         const SizedBox(width: 4),
       ];
     }
 
-    // 3. 选中节点态
+    // 4. 选中节点态（已去掉最右侧叉号按钮）
     if (selectedNode != null) {
       if (selectedNode.isPrompt) {
         return [
@@ -287,16 +339,10 @@ class _MainScreenState extends State<MainScreen> {
             tooltip: '删除提示节点',
             onPressed: () => _confirmDeleteNode(selectedNode),
           ),
-          IconButton(
-            icon: const Icon(Icons.close, color: Colors.black38),
-            tooltip: '取消选中',
-            onPressed: () => widget.engine.selectNode(null),
-          ),
           const SizedBox(width: 4),
         ];
       }
 
-      // 常规节点：保留打卡、详情入口与取消
       return [
         IconButton(
           icon: const Icon(
@@ -319,16 +365,11 @@ class _MainScreenState extends State<MainScreen> {
           tooltip: '查看节点详情与管理',
           onPressed: () => _openNodeDetail(selectedNode.id),
         ),
-        IconButton(
-          icon: const Icon(Icons.close, color: Colors.black38),
-          tooltip: '取消选中',
-          onPressed: () => widget.engine.selectNode(null),
-        ),
         const SizedBox(width: 4),
       ];
     }
 
-    // 4. 树界面常规态
+    // 5. 树界面常规态
     if (_currentViewIndex == 1) {
       return [
         IconButton(
@@ -358,6 +399,43 @@ class _MainScreenState extends State<MainScreen> {
           },
         ),
         const SizedBox(width: 8),
+      ];
+    }
+
+    // 6. 列表界面常规态：最右侧设置弹窗（包含归档）
+    if (_currentViewIndex == 0) {
+      return [
+        PopupMenuButton<String>(
+          icon: const Icon(Icons.more_vert_rounded, color: AppTheme.deepNavy),
+          tooltip: '更多操作',
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          color: AppTheme.surfaceWhite,
+          onSelected: (val) {
+            if (val == 'archive') {
+              widget.engine.startArchiveMode();
+            }
+          },
+          itemBuilder: (context) => [
+            const PopupMenuItem(
+              value: 'archive',
+              child: Row(
+                children: [
+                  Icon(Icons.archive_outlined, size: 18, color: AppTheme.deepNavy),
+                  SizedBox(width: 8),
+                  Text(
+                    '归档',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.deepNavy,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(width: 4),
       ];
     }
 
@@ -542,9 +620,11 @@ class _MainScreenState extends State<MainScreen> {
           attributeDeltas: result.attributeDeltas,
           recordDate: result.date,
         );
+        widget.engine.selectNode(null);
       }
     } else {
       widget.engine.changeProgress(node.id, delta);
+      widget.engine.selectNode(null);
     }
   }
 

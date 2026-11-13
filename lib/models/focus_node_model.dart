@@ -76,25 +76,6 @@ class NodeScoreResult {
     this.hValue = 0.0,
     this.justBrokeStreak = false,
   });
-
-  /// 分数区间梯队名称[cite: 1]
-  String get stageName {
-    if (score >= 85.0) return '巅峰期';
-    if (score >= 60.0) return '巩固期';
-    if (score >= 30.0) return '成长期';
-    return '起步期';
-  }
-
-  /// 分数区间状态文案与断签挽回激励[cite: 1]
-  String get stageTip {
-    if (justBrokeStreak && lastBrokenStreak >= 3 && energy > 0.5) {
-      return '虽然势能受损，但你的自律底座依然扎实，坚持打卡 3 天即可挽回大部分势能！'; //[cite: 1]
-    }
-    if (score >= 85.0) return '点亮巅峰徽章！注意一旦断签将扣减大量势能'; //[cite: 1]
-    if (score >= 60.0) return '当前自律结构良好，继续保持稳定节奏'; //[cite: 1]
-    if (score >= 30.0) return '渐入佳境，连续打卡将显著拉升分数'; //[cite: 1]
-    return '正在生根，每一次打卡都在积蓄初始势能'; //[cite: 1]
-  }
 }
 
 /// 国策的数字属性定义与累计值
@@ -176,17 +157,12 @@ class FocusNodeModel {
   int decreaseCount;
   int version;
   bool isPrompt;
+  bool isArchived;
   String? latestNote;
 
   // 节点自定义备注弹窗开关
   bool promptNoteOnIncrease;
   bool promptNoteOnDecrease;
-
-  // 重复排期规则：mode 0 为按星期，mode 1 为按频次
-  int repeatMode;
-  List<int> repeatWeekdays; // 1(周一) ~ 7(周日)
-  int repeatFreqType; // 0: 每x天, 1: 每周x次, 2: 每月x次
-  int repeatFreqValue; // x 的取值
 
   List<NumericAttribute>? _numericAttributes;
   List<NumericAttribute> get numericAttributes => _numericAttributes ??= [];
@@ -205,52 +181,16 @@ class FocusNodeModel {
     this.decreaseCount = 0,
     this.version = 1,
     this.isPrompt = false,
+    this.isArchived = false,
     this.latestNote,
     this.promptNoteOnIncrease = true,
     this.promptNoteOnDecrease = true,
-    this.repeatMode = 0,
-    List<int>? repeatWeekdays,
-    this.repeatFreqType = 0,
-    this.repeatFreqValue = 1,
     List<NumericAttribute>? numericAttributes,
     this.x,
     this.y,
     DateTime? createdAt,
-  })  : repeatWeekdays = repeatWeekdays != null && repeatWeekdays.isNotEmpty
-            ? List.from(repeatWeekdays)
-            : [1, 2, 3, 4, 5, 6, 7],
-        _numericAttributes = numericAttributes ?? [],
+  })  : _numericAttributes = numericAttributes ?? [],
         createdAt = createdAt ?? DateTime.now();
-
-  static String formatRepeatRule({
-    required int mode,
-    required List<int> weekdays,
-    required int freqType,
-    required int freqValue,
-  }) {
-    if (mode == 0) {
-      if (weekdays.length >= 7) return '每天';
-      final sorted = List<int>.from(weekdays)..sort();
-      const names = ['', '一', '二', '三', '四', '五', '六', '日'];
-      return '周${sorted.map((d) => names[d.clamp(1, 7)]).join("、")}';
-    } else {
-      if (freqType == 0) {
-        return freqValue <= 1 ? '每天' : '每 $freqValue 天';
-      } else if (freqType == 1) {
-        return '每周 $freqValue 次';
-      } else {
-        return '每月 $freqValue 次';
-      }
-    }
-  }
-
-  /// 获取当前重复规则的可读描述
-  String get repeatDescription => formatRepeatRule(
-        mode: repeatMode,
-        weekdays: repeatWeekdays,
-        freqType: repeatFreqType,
-        freqValue: repeatFreqValue,
-      );
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -261,13 +201,10 @@ class FocusNodeModel {
         'decreaseCount': decreaseCount,
         'version': version,
         'isPrompt': isPrompt,
+        'isArchived': isArchived,
         'latestNote': latestNote,
         'promptNoteOnIncrease': promptNoteOnIncrease,
         'promptNoteOnDecrease': promptNoteOnDecrease,
-        'repeatMode': repeatMode,
-        'repeatWeekdays': repeatWeekdays,
-        'repeatFreqType': repeatFreqType,
-        'repeatFreqValue': repeatFreqValue,
         'numericAttributes':
             numericAttributes.map((attr) => attr.toJson()).toList(),
         'x': x,
@@ -284,16 +221,10 @@ class FocusNodeModel {
         decreaseCount: json['decreaseCount'] as int? ?? 0,
         version: json['version'] as int? ?? 1,
         isPrompt: json['isPrompt'] as bool? ?? false,
+        isArchived: json['isArchived'] as bool? ?? false,
         latestNote: json['latestNote'] as String?,
         promptNoteOnIncrease: json['promptNoteOnIncrease'] as bool? ?? true,
         promptNoteOnDecrease: json['promptNoteOnDecrease'] as bool? ?? true,
-        repeatMode: json['repeatMode'] as int? ?? 0,
-        repeatWeekdays: (json['repeatWeekdays'] as List<dynamic>?)
-                ?.map((e) => (e as num).toInt())
-                .toList() ??
-            [1, 2, 3, 4, 5, 6, 7],
-        repeatFreqType: json['repeatFreqType'] as int? ?? 0,
-        repeatFreqValue: json['repeatFreqValue'] as int? ?? 1,
         numericAttributes: (json['numericAttributes'] as List<dynamic>?)
             ?.map((e) => NumericAttribute.fromJson(e as Map<String, dynamic>))
             .toList(),
@@ -386,8 +317,6 @@ class ProgressRecord {
   final String? newTitle;
   final String? oldContent;
   final String? newContent;
-  final String? oldRepeatDesc;
-  final String? newRepeatDesc;
   final List<AttributeChange>? attributeChanges;
   final DateTime time;
 
@@ -406,8 +335,6 @@ class ProgressRecord {
     this.newTitle,
     this.oldContent,
     this.newContent,
-    this.oldRepeatDesc,
-    this.newRepeatDesc,
     this.attributeChanges,
     required this.time,
   });
@@ -427,8 +354,6 @@ class ProgressRecord {
         'newTitle': newTitle,
         'oldContent': oldContent,
         'newContent': newContent,
-        'oldRepeatDesc': oldRepeatDesc,
-        'newRepeatDesc': newRepeatDesc,
         'attributeChanges':
             attributeChanges?.map((e) => e.toJson()).toList(),
         'time': time.toIso8601String(),
@@ -453,8 +378,6 @@ class ProgressRecord {
         newTitle: json['newTitle'] as String?,
         oldContent: json['oldContent'] as String?,
         newContent: json['newContent'] as String?,
-        oldRepeatDesc: json['oldRepeatDesc'] as String?,
-        newRepeatDesc: json['newRepeatDesc'] as String?,
         attributeChanges: (json['attributeChanges'] as List<dynamic>?)
             ?.map((e) => AttributeChange.fromJson(e as Map<String, dynamic>))
             .toList(),
