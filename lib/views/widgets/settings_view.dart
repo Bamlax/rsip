@@ -181,7 +181,23 @@ class SettingsView extends StatelessWidget {
               ),
               const Divider(height: 1, thickness: 0.8, color: AppTheme.borderLight),
 
-              // 2. 习惯连续性打分算法参数配置
+              // 2. 前一天未完成自动标记为减开关
+              SwitchListTile(
+                title: const Text(
+                  '未完成自动标记为减',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppTheme.deepNavy),
+                ),
+                subtitle: const Text(
+                  '前一天未完成增减或跳过，且未归档的节点自动记为减',
+                  style: TextStyle(fontSize: 12, color: Colors.black45),
+                ),
+                value: engine.autoPenalizeMissedYesterday,
+                activeColor: AppTheme.primaryBlue,
+                onChanged: (val) => engine.setAutoPenalizeMissedYesterday(val),
+              ),
+              const Divider(height: 1, thickness: 0.8, color: AppTheme.borderLight),
+
+              // 3. 习惯连续性打分算法参数配置
               ListTile(
                 title: const Text(
                   '计分算法参数设置',
@@ -203,7 +219,7 @@ class SettingsView extends StatelessWidget {
               ),
               const Divider(height: 1, thickness: 0.8, color: AppTheme.borderLight),
 
-              // 3. 版本历史
+              // 4. 版本历史
               ListTile(
                 title: const Text(
                   '版本历史',
@@ -225,7 +241,7 @@ class SettingsView extends StatelessWidget {
                       ),
                       child: Text(
                         'v${VersionHistoryConfig.currentVersion}',
-                        style: TextStyle(
+                        style: const TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.bold,
                           color: AppTheme.deepNavy,
@@ -247,7 +263,7 @@ class SettingsView extends StatelessWidget {
               ),
               const Divider(height: 1, thickness: 0.8, color: AppTheme.borderLight),
 
-              // 4. 最底部：删除数据（清空历史填充数据，保留版本号）
+              // 5. 最底部：删除数据
               ListTile(
                 title: const Text(
                   '删除数据',
@@ -326,7 +342,6 @@ class _ScoreConfigScreenState extends State<ScoreConfigScreen> {
       body: ListView(
         padding: const EdgeInsets.only(top: 0, bottom: 32),
         children: [
-          // 顶部公式概览横幅
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             color: const Color(0xFFF0F7FF),
@@ -344,8 +359,6 @@ class _ScoreConfigScreenState extends State<ScoreConfigScreen> {
             ),
           ),
           const Divider(height: 1, color: AppTheme.borderLight),
-
-          // 1. 滑动窗口 W
           _buildParamCard(
             title: '滑动窗口 (W)',
             valueText: '${_cfg.windowSize} 天 (默认 90)',
@@ -365,8 +378,6 @@ class _ScoreConfigScreenState extends State<ScoreConfigScreen> {
               },
             ),
           ),
-
-          // 2. 连续饱和尺度 τ
           _buildParamCard(
             title: '连续饱和尺度 (τ)',
             valueText: '${_cfg.tau.toStringAsFixed(1)} (默认 14.0)',
@@ -386,8 +397,6 @@ class _ScoreConfigScreenState extends State<ScoreConfigScreen> {
               },
             ),
           ),
-
-          // 3. 权重分配 w_R : w_H
           _buildParamCard(
             title: '短期与长期权重比 (w_R : w_H)',
             valueText:
@@ -408,15 +417,13 @@ class _ScoreConfigScreenState extends State<ScoreConfigScreen> {
               },
             ),
           ),
-
-          // 4. 分段幂次 p
           _buildParamCard(
             title: '分段幂次 (p)',
             valueText: '${_cfg.powerP.toStringAsFixed(2)} (默认 1.50)',
             description:
                 '【含义】对“三天打鱼两天晒网”碎片化打卡的打击烈度。\n'
                 '• 数值调小（接近 1.0）：退化为普通完成率，断断续续打卡也能拿到不错的分数；\n'
-                '• 数值调大（如 1.8~2.0）：极度强调“连续段越长越值钱”，频繁断签会导致历史质量分 H 大幅缩水（推荐 1.4~1.6 兼顾区分度与抗挫力）。',
+                '• 数值调大（如 1.8~2.0）：极度强调“连续段越长越值钱”，频繁断签会导致历史质量分 H 大幅缩水。',
             slider: Slider(
               value: _cfg.powerP,
               min: 1.0,
@@ -429,8 +436,6 @@ class _ScoreConfigScreenState extends State<ScoreConfigScreen> {
               },
             ),
           ),
-
-          // 5. 冷启动常数 K
           _buildParamCard(
             title: '冷启动常数 (K)',
             valueText: '${_cfg.coldStartK} 天 (默认 7)',
@@ -450,8 +455,6 @@ class _ScoreConfigScreenState extends State<ScoreConfigScreen> {
               },
             ),
           ),
-
-          // 6. 基础能量保留率 γ_base
           _buildParamCard(
             title: '基础能量保留率 (γ_base)',
             valueText: '${_cfg.gammaBase.toStringAsFixed(2)} (默认 0.85)',
@@ -476,15 +479,13 @@ class _ScoreConfigScreenState extends State<ScoreConfigScreen> {
               },
             ),
           ),
-
-          // 7. 连击衰减斜率 k_drop
           _buildParamCard(
             title: '连击断签惩罚斜率 (k_drop)',
             valueText: '${_cfg.kDrop.toStringAsFixed(3)} (默认 0.005)',
             description:
                 '【含义】强化断签惩罚系数：每连续坚持 1 天，断签时的能量保留率额外降低 k_drop（连击越长，断开越痛）。\n'
                 '• 设为 0.000：关闭动态加罚，所有连击天数断签均按固定 γ_base 衰减；\n'
-                '• 数值调大（如 0.005~0.015）：高连击断签时将产生强烈的沉没成本痛感，促使全力维持长连击。',
+                '• 数值调大（如 0.005~0.015）：高连击断签时将产生强烈的沉没成本痛感。',
             slider: Slider(
               value: _cfg.kDrop,
               min: 0.000,
@@ -497,8 +498,6 @@ class _ScoreConfigScreenState extends State<ScoreConfigScreen> {
               },
             ),
           ),
-
-          // 8. 保留率下限 γ_min
           _buildParamCard(
             title: '断签保留率下限 (γ_min)',
             valueText: '${_cfg.gammaMin.toStringAsFixed(2)} (默认 0.35)',

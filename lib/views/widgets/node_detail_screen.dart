@@ -398,9 +398,12 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
 
   Widget _buildSeamlessHistoryRow(ProgressRecord record, FocusNodeModel node) {
     final isGain = record.delta > 0;
+    final isSkip = record.isSkip;
     final Color rowBgColor = record.isEdit
         ? const Color(0xFFF0F7FF)
-        : (isGain ? const Color(0xFFF2FBF4) : const Color(0xFFFDF3F3));
+        : isSkip
+            ? const Color(0xFFF1F5F9)
+            : (isGain ? const Color(0xFFF2FBF4) : const Color(0xFFFDF3F3));
 
     final timeStr = widget.engine.formatRecordDate(record.time);
 

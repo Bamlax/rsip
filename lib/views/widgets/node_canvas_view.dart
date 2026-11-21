@@ -39,9 +39,10 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
   Offset? _groupDragStartFingerPos;
   Map<String, Offset>? _groupDragStartPositions;
 
-  // 单个节点拖拽状态
+  // 单个节点拖拽状态（记录场景坐标起点，消除缩放偏移）
   String? _draggingNodeId;
   Offset? _nodeDragStartPos;
+  Offset? _nodeDragStartFingerPos;
 
   @override
   void initState() {
@@ -425,22 +426,39 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
       child: GestureDetector(
         onTap: () => _onNodeTap(node),
         onPanStart: (details) {
-          _nodeDragStartPos = pos;
-          setState(() => _draggingNodeId = node.id);
-        },
-        onPanUpdate: (details) {
-          if (_draggingNodeId == node.id) {
-            final sceneDelta = details.delta / _transController.value.getMaxScaleOnAxis();
-            final curX = node.x ?? _canvasWidth / 2;
-            final curY = node.y ?? _canvasHeight / 2;
-            widget.engine.updateNodePosition(
-              node.id,
-              (curX + sceneDelta.dx).clamp(50.0, _canvasWidth - 50.0),
-              (curY + sceneDelta.dy).clamp(50.0, _canvasHeight - 50.0),
-            );
+          final renderBox = _canvasKey.currentContext?.findRenderObject() as RenderBox?;
+          if (renderBox != null) {
+            _nodeDragStartFingerPos = renderBox.globalToLocal(details.globalPosition);
+            _nodeDragStartPos = pos;
+            setState(() => _draggingNodeId = node.id);
           }
         },
-        onPanEnd: (_) => setState(() => _draggingNodeId = null),
+        onPanUpdate: (details) {
+          if (_draggingNodeId == node.id &&
+              _nodeDragStartFingerPos != null &&
+              _nodeDragStartPos != null) {
+            final renderBox = _canvasKey.currentContext?.findRenderObject() as RenderBox?;
+            if (renderBox != null) {
+              final currentFingerPos = renderBox.globalToLocal(details.globalPosition);
+              final delta = currentFingerPos - _nodeDragStartFingerPos!;
+              widget.engine.updateNodePosition(
+                node.id,
+                (_nodeDragStartPos!.dx + delta.dx).clamp(50.0, _canvasWidth - 50.0),
+                (_nodeDragStartPos!.dy + delta.dy).clamp(50.0, _canvasHeight - 50.0),
+              );
+            }
+          }
+        },
+        onPanEnd: (_) => setState(() {
+          _draggingNodeId = null;
+          _nodeDragStartPos = null;
+          _nodeDragStartFingerPos = null;
+        }),
+        onPanCancel: () => setState(() {
+          _draggingNodeId = null;
+          _nodeDragStartPos = null;
+          _nodeDragStartFingerPos = null;
+        }),
         child: node.isPrompt
             ? _buildPromptNodeCard(node, isSelectedSingle, isHighlightedGroup, isDragging)
             : _buildNormalNodeCard(

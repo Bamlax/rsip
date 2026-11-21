@@ -36,6 +36,22 @@ class VersionHistoryConfig {
 
   static const List<VersionRelease> releases = [
       VersionRelease(
+      version: '0.8.0',
+      releaseDate: '2026-11-16',
+      changeLogs: [
+        '新增：可以标记为跳过的打卡记录',
+        '新增：强制标记为未完成的强制模式',
+        '优化：归档界面的UI设计',
+      ],
+    ),
+      VersionRelease(
+      version: '0.7.2',
+      releaseDate: '2026-11-14',
+      changeLogs: [
+        '修复：缩放状态下树界面节点移动时的错误偏移问题',
+      ],
+    ),
+      VersionRelease(
       version: '0.7.1',
       releaseDate: '2026-11-12',
       changeLogs: [

@@ -1,9 +1,7 @@
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../../core/app_theme.dart';
 import '../../core/progress_color_helper.dart';
 import '../../engine/rsip_engine.dart';
-import '../../models/focus_node_model.dart';
 
 class StatisticsView extends StatefulWidget {
   final RsipEngine engine;
@@ -31,27 +29,39 @@ class _StatisticsViewState extends State<StatisticsView> {
     return ListenableBuilder(
       listenable: widget.engine,
       builder: (context, _) {
-        final normalNodes = widget.engine.nodes.where((n) => !n.isPrompt).toList();
-        final rawRecords = widget.engine.history.where((r) => !r.isEdit && r.delta != 0).toList();
+        final normalNodes = widget.engine.nodes
+            .where((n) => !n.isPrompt && !n.isArchived)
+            .toList();
+
+        // 包含正向、负向与跳过的所有有效行为记录
+        final allActionRecords = widget.engine.history
+            .where((r) => !r.isEdit && (r.delta != 0 || r.isSkip))
+            .toList();
 
         final today = widget.engine.getEffectiveDate(DateTime.now());
 
-        // 1. 统计打卡总量与正负比例
-        final totalCount = rawRecords.length;
-        final posCount = rawRecords.where((r) => r.delta > 0).length;
-        final negCount = rawRecords.where((r) => r.delta < 0).length;
-        final winRate = totalCount > 0 ? (posCount / totalCount * 100.0) : 0.0;
+        // 1. 统计正负次数、跳过次数与胜率（胜率自动排除跳过记录）
+        final totalCount = allActionRecords.length;
+        final posCount =
+            allActionRecords.where((r) => !r.isSkip && r.delta > 0).length;
+        final negCount =
+            allActionRecords.where((r) => !r.isSkip && r.delta < 0).length;
+        final skipCount = allActionRecords.where((r) => r.isSkip).length;
 
-        // 2. 活跃天数与连续打卡
+        final validDecisionCount = posCount + negCount;
+        final winRate = validDecisionCount > 0
+            ? (posCount / validDecisionCount * 100.0)
+            : 0.0;
+
+        // 2. 活跃天数与连续打卡（含跳过日，保持热力图与活跃节奏连续）
         final Set<DateTime> activeDays = {};
         final Map<DateTime, int> dailyRecordCount = {};
-        for (final r in rawRecords) {
+        for (final r in allActionRecords) {
           final d = widget.engine.getEffectiveDate(r.time);
           activeDays.add(d);
           dailyRecordCount[d] = (dailyRecordCount[d] ?? 0) + 1;
         }
 
-        // 计算当前全局连续打卡天数
         int currentStreak = 0;
         DateTime checkDay = today;
         if (!dailyRecordCount.containsKey(checkDay)) {
@@ -72,15 +82,15 @@ class _StatisticsViewState extends State<StatisticsView> {
           avgScore = totalScore / normalNodes.length;
         }
 
-        // 4. 标签归因聚合统计
+        // 4. 标签归因聚合统计（跳过记录不计入挫折诱因）
         final Map<String, int> posTagCounts = {};
         final Map<String, int> negTagCounts = {};
-        for (final r in rawRecords) {
-          if (r.tags == null || r.tags!.isEmpty) continue;
+        for (final r in allActionRecords) {
+          if (r.isSkip || r.tags == null || r.tags!.isEmpty) continue;
           for (final tag in r.tags!) {
             if (r.delta > 0) {
               posTagCounts[tag] = (posTagCounts[tag] ?? 0) + 1;
-            } else {
+            } else if (r.delta < 0) {
               negTagCounts[tag] = (negTagCounts[tag] ?? 0) + 1;
             }
           }
@@ -91,7 +101,7 @@ class _StatisticsViewState extends State<StatisticsView> {
         final sortedNegTags = negTagCounts.entries.toList()
           ..sort((a, b) => b.value.compareTo(a.value));
 
-        // 5. 国策排行榜（得分由高到低与关注榜）
+        // 5. 国策排行榜
         final scoredNodes = normalNodes.map((n) {
           return MapEntry(n, widget.engine.getNodeScore(n.id));
         }).toList()
@@ -133,8 +143,10 @@ class _StatisticsViewState extends State<StatisticsView> {
                         value: '${winRate.toStringAsFixed(0)}%',
                         valColor: winRate >= 70
                             ? Colors.green.shade700
-                            : (winRate >= 50 ? AppTheme.primaryBlue : Colors.orange.shade800),
-                        subLabel: '+$posCount / -$negCount',
+                            : (winRate >= 50
+                                ? AppTheme.primaryBlue
+                                : Colors.orange.shade800),
+                        subLabel: '+$posCount / -$negCount · 跳过 $skipCount',
                       ),
                     ],
                   ),
@@ -161,7 +173,7 @@ class _StatisticsViewState extends State<StatisticsView> {
             ),
             const SizedBox(height: 14),
 
-            // 模块二：15周打卡贡献热力图
+            // 模块二：16周打卡贡献热力图
             Container(
               padding: const EdgeInsets.symmetric(vertical: 14),
               decoration: const BoxDecoration(
@@ -198,7 +210,8 @@ class _StatisticsViewState extends State<StatisticsView> {
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 16),
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 6),
                         decoration: BoxDecoration(
                           color: AppTheme.bgCanvas,
                           borderRadius: BorderRadius.circular(6),
@@ -206,11 +219,15 @@ class _StatisticsViewState extends State<StatisticsView> {
                         ),
                         child: Row(
                           children: [
-                            const Icon(Icons.info_outline_rounded, size: 14, color: AppTheme.primaryBlue),
+                            const Icon(Icons.info_outline_rounded,
+                                size: 14, color: AppTheme.primaryBlue),
                             const SizedBox(width: 6),
                             Text(
                               '${_formatDate(_selectedHeatmapDate!)}：共记录 $_selectedHeatmapCount 次',
-                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.deepNavy),
+                              style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  color: AppTheme.deepNavy),
                             ),
                           ],
                         ),
@@ -247,7 +264,6 @@ class _StatisticsViewState extends State<StatisticsView> {
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // 正向标签 Top
                       Expanded(
                         child: _buildTagList(
                           title: '正向动力 Top',
@@ -256,7 +272,6 @@ class _StatisticsViewState extends State<StatisticsView> {
                         ),
                       ),
                       const SizedBox(width: 14),
-                      // 负向标签 Top
                       Expanded(
                         child: _buildTagList(
                           title: '挫折诱因 Top',
@@ -297,7 +312,9 @@ class _StatisticsViewState extends State<StatisticsView> {
                     const Padding(
                       padding: EdgeInsets.symmetric(vertical: 16),
                       child: Center(
-                        child: Text('暂无国策健康度数据', style: TextStyle(fontSize: 12, color: Colors.black38)),
+                        child: Text('暂无国策健康度数据',
+                            style:
+                                TextStyle(fontSize: 12, color: Colors.black38)),
                       ),
                     )
                   else
@@ -305,12 +322,15 @@ class _StatisticsViewState extends State<StatisticsView> {
                       final item = scoredNodes[idx];
                       final node = item.key;
                       final scoreRes = item.value;
-                      final scoreColor = ProgressColorHelper.getScoreColor(scoreRes.score);
-                      final scoreBg = ProgressColorHelper.getScoreBgColor(scoreRes.score);
+                      final scoreColor =
+                          ProgressColorHelper.getScoreColor(scoreRes.score);
+                      final scoreBg =
+                          ProgressColorHelper.getScoreBgColor(scoreRes.score);
 
                       return Container(
                         margin: const EdgeInsets.only(bottom: 8),
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
                         decoration: BoxDecoration(
                           color: AppTheme.bgCanvas,
                           borderRadius: BorderRadius.circular(8),
@@ -324,7 +344,8 @@ class _StatisticsViewState extends State<StatisticsView> {
                               alignment: Alignment.center,
                               decoration: BoxDecoration(
                                 color: idx < 3
-                                    ? AppTheme.primaryBlue.withValues(alpha: 0.12)
+                                    ? AppTheme.primaryBlue
+                                        .withValues(alpha: 0.12)
                                     : Colors.black.withValues(alpha: 0.05),
                                 shape: BoxShape.circle,
                               ),
@@ -333,7 +354,9 @@ class _StatisticsViewState extends State<StatisticsView> {
                                 style: TextStyle(
                                   fontSize: 11,
                                   fontWeight: FontWeight.bold,
-                                  color: idx < 3 ? AppTheme.primaryBlue : Colors.black45,
+                                  color: idx < 3
+                                      ? AppTheme.primaryBlue
+                                      : Colors.black45,
                                 ),
                               ),
                             ),
@@ -355,13 +378,15 @@ class _StatisticsViewState extends State<StatisticsView> {
                                   const SizedBox(height: 2),
                                   Text(
                                     '连续 ${scoreRes.streak} 天 · 势能 E=${scoreRes.energy.toStringAsFixed(1)}',
-                                    style: const TextStyle(fontSize: 10, color: Colors.black45),
+                                    style: const TextStyle(
+                                        fontSize: 10, color: Colors.black45),
                                   ),
                                 ],
                               ),
                             ),
                             Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 3),
                               decoration: BoxDecoration(
                                 color: scoreBg,
                                 borderRadius: BorderRadius.circular(6),
@@ -408,7 +433,8 @@ class _StatisticsViewState extends State<StatisticsView> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(label, style: const TextStyle(fontSize: 11, color: Colors.black54)),
+            Text(label,
+                style: const TextStyle(fontSize: 11, color: Colors.black54)),
             const SizedBox(height: 4),
             Text(
               value,
@@ -419,7 +445,8 @@ class _StatisticsViewState extends State<StatisticsView> {
               ),
             ),
             const SizedBox(height: 2),
-            Text(subLabel, style: const TextStyle(fontSize: 10, color: Colors.black38)),
+            Text(subLabel,
+                style: const TextStyle(fontSize: 10, color: Colors.black38)),
           ],
         ),
       ),
@@ -458,13 +485,13 @@ class _StatisticsViewState extends State<StatisticsView> {
 
   Widget _buildHeatmapGrid(DateTime today, Map<DateTime, int> dailyCounts) {
     const int numWeeks = 16;
-    final int todayWeekday = today.weekday; // 1 (Mon) ~ 7 (Sun)
-    // 往前推算 15 周前的周一
-    final startMonday = today.subtract(Duration(days: (numWeeks - 1) * 7 + (todayWeekday - 1)));
+    final int todayWeekday = today.weekday;
+    final startMonday = today
+        .subtract(Duration(days: (numWeeks - 1) * 7 + (todayWeekday - 1)));
 
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
-      reverse: true, // 默认滚动到最右侧的今日
+      reverse: true,
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -531,7 +558,8 @@ class _StatisticsViewState extends State<StatisticsView> {
     required bool isPositive,
   }) {
     final themeColor = isPositive ? Colors.green.shade700 : Colors.red.shade700;
-    final bgLight = isPositive ? const Color(0xFFF0FDF4) : const Color(0xFFFEF2F2);
+    final bgLight =
+        isPositive ? const Color(0xFFF0FDF4) : const Color(0xFFFEF2F2);
 
     return Container(
       padding: const EdgeInsets.all(10),

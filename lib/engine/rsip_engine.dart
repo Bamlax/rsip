@@ -21,9 +21,12 @@ class RsipEngine extends ChangeNotifier {
   final Set<String> _archiveSelectedIds = {};
 
   int _dayStartHourOffset = 0;
+  bool _autoPenalizeMissedYesterday = false;
+  String? _lastAutoPenaltyDate;
   HabitScoreConfig _scoreConfig = HabitScoreConfig();
 
   int get dayStartHourOffset => _dayStartHourOffset;
+  bool get autoPenalizeMissedYesterday => _autoPenalizeMissedYesterday;
   HabitScoreConfig get scoreConfig => _scoreConfig;
   List<FocusNodeModel> get nodes => List.unmodifiable(_nodes);
   Set<FocusConnection> get connections => Set.unmodifiable(_connections);
@@ -60,6 +63,8 @@ class RsipEngine extends ChangeNotifier {
   static const String _keyGroups = 'rsip_groups_data';
   static const String _keyHistory = 'rsip_history_data';
   static const String _keyDayOffset = 'rsip_day_start_hour_offset';
+  static const String _keyAutoPenalize = 'rsip_auto_penalize_missed_yesterday';
+  static const String _keyLastPenaltyDate = 'rsip_last_auto_penalty_date';
   static const String _keyScoreConfig = 'rsip_habit_score_config';
 
   Future<void> _loadFromStorage() async {
@@ -67,6 +72,8 @@ class RsipEngine extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
 
       _dayStartHourOffset = prefs.getInt(_keyDayOffset) ?? 0;
+      _autoPenalizeMissedYesterday = prefs.getBool(_keyAutoPenalize) ?? false;
+      _lastAutoPenaltyDate = prefs.getString(_keyLastPenaltyDate);
 
       final scoreCfgJson = prefs.getString(_keyScoreConfig);
       if (scoreCfgJson != null) {
@@ -101,6 +108,9 @@ class RsipEngine extends ChangeNotifier {
         _history.addAll(list.map((e) => ProgressRecord.fromJson(e)));
       }
 
+      // 若开启了前一天未完成自动标记为减，加载后执行检查
+      await _applyMissedYesterdayPenaltyIfNeeded(saveAfter: true);
+
       notifyListeners();
     } catch (e) {
       debugPrint('加载本地存储失败: $e');
@@ -128,9 +138,76 @@ class RsipEngine extends ChangeNotifier {
         jsonEncode(_history.map((h) => h.toJson()).toList()),
       );
       await prefs.setInt(_keyDayOffset, _dayStartHourOffset);
+      await prefs.setBool(_keyAutoPenalize, _autoPenalizeMissedYesterday);
+      if (_lastAutoPenaltyDate != null) {
+        await prefs.setString(_keyLastPenaltyDate, _lastAutoPenaltyDate!);
+      }
       await prefs.setString(_keyScoreConfig, jsonEncode(_scoreConfig.toJson()));
     } catch (e) {
       debugPrint('保存到本地存储失败: $e');
+    }
+  }
+
+  // ==========================================
+  // 前一天未完成自动标记为减
+  // ==========================================
+
+  Future<void> setAutoPenalizeMissedYesterday(bool enabled) async {
+    _autoPenalizeMissedYesterday = enabled;
+    if (enabled) {
+      await _applyMissedYesterdayPenaltyIfNeeded(saveAfter: false);
+    }
+    notifyListeners();
+    await _saveToStorage();
+  }
+
+  Future<void> _applyMissedYesterdayPenaltyIfNeeded({bool saveAfter = true}) async {
+    if (!_autoPenalizeMissedYesterday) return;
+
+    final today = getEffectiveDate(DateTime.now());
+    final yesterday = DateTime(today.year, today.month, today.day - 1);
+    final yesterdayStr = formatRecordDate(yesterday);
+
+    if (_lastAutoPenaltyDate == yesterdayStr) return;
+
+    bool hasAddedRecord = false;
+    final yesterdayTimestamp =
+        DateTime(yesterday.year, yesterday.month, yesterday.day, 23, 59);
+
+    for (final node in _nodes) {
+      if (node.isPrompt || node.isArchived) continue;
+
+      final createdDate = getEffectiveDate(node.createdAt);
+      // 仅检查在昨天或昨天之前创建的国策
+      if (createdDate.isAfter(yesterday)) continue;
+
+      final hasAnyActionYesterday = _history.any((r) =>
+          !r.isEdit &&
+          r.nodeId == node.id &&
+          (r.delta != 0 || r.isSkip) &&
+          _isSameDay(getEffectiveDate(r.time), yesterday));
+
+      if (!hasAnyActionYesterday) {
+        node.progress -= 1;
+        node.decreaseCount += 1;
+        _history.add(
+          ProgressRecord(
+            id: '${DateTime.now().microsecondsSinceEpoch}_${node.id}',
+            nodeId: node.id,
+            nodeTitle: node.title,
+            delta: -1,
+            resultProgress: node.progress,
+            note: '前一天未完成自动标记',
+            time: yesterdayTimestamp,
+          ),
+        );
+        hasAddedRecord = true;
+      }
+    }
+
+    _lastAutoPenaltyDate = yesterdayStr;
+    if (saveAfter && hasAddedRecord) {
+      await _saveToStorage();
     }
   }
 
@@ -150,7 +227,7 @@ class RsipEngine extends ChangeNotifier {
     _saveToStorage();
   }
 
-  /// 计算单个节点的 0~100 习惯连续性健康度得分[cite: 1]
+  /// 计算单个节点的 0~100 习惯连续性健康度得分（跳过日冻结连续状态，不惩罚）
   NodeScoreResult getNodeScore(String nodeId) {
     final nodeIndex = _nodes.indexWhere((n) => n.id == nodeId);
     if (nodeIndex == -1) return const NodeScoreResult();
@@ -159,15 +236,20 @@ class RsipEngine extends ChangeNotifier {
 
     final today = getEffectiveDate(DateTime.now());
     final nodeRecords = _history
-        .where((r) => !r.isEdit && r.nodeId == nodeId && r.delta != 0)
+        .where((r) => !r.isEdit && r.nodeId == nodeId && (r.delta != 0 || r.isSkip))
         .toList();
 
     final Map<DateTime, int> dailyNetDelta = {};
+    final Set<DateTime> dailySkipDates = {};
     DateTime? earliestRecordDate;
 
     for (final r in nodeRecords) {
       final d = getEffectiveDate(r.time);
-      dailyNetDelta[d] = (dailyNetDelta[d] ?? 0) + r.delta;
+      if (r.isSkip) {
+        dailySkipDates.add(d);
+      } else {
+        dailyNetDelta[d] = (dailyNetDelta[d] ?? 0) + r.delta;
+      }
       if (earliestRecordDate == null || d.isBefore(earliestRecordDate)) {
         earliestRecordDate = d;
       }
@@ -192,24 +274,23 @@ class RsipEngine extends ChangeNotifier {
     for (DateTime d = startDate;
         !d.isAfter(today);
         d = DateTime(d.year, d.month, d.day + 1)) {
-      final hasRecordOnDay = dailyNetDelta.containsKey(d);
+      final hasDeltaOnDay = dailyNetDelta.containsKey(d);
+      final hasSkipOnDay = dailySkipDates.contains(d);
       final isToday = _isSameDay(d, today);
 
-      // 当日尚未填写记录：处于等待状态，暂不扣减势能[cite: 1]
-      if (isToday && !hasRecordOnDay) {
+      // 当日尚未填写任何记录：处于等待状态，暂不扣减势能
+      if (isToday && !hasDeltaOnDay && !hasSkipOnDay) {
         break;
       }
 
-      if (hasRecordOnDay) {
+      if (hasDeltaOnDay) {
         final net = dailyNetDelta[d]!;
         if (net > 0) {
-          // x_t == 1 完成打卡[cite: 1]
           streak += 1;
           energy += 1.0;
           justBroke = false;
           windowEvents.add(1);
         } else {
-          // 负面打卡断签：x_t == 0[cite: 1]
           lastBrokenStreak = streak;
           streak = 0;
           final gamma = math.max(
@@ -220,8 +301,11 @@ class RsipEngine extends ChangeNotifier {
           justBroke = true;
           windowEvents.add(0);
         }
+      } else if (hasSkipOnDay) {
+        // 显式跳过：冻结当天势能与连击数，既不增加也不触发断签惩罚
+        continue;
       } else {
-        // 历史未打卡日 (d < today)：计为断签 x_t == 0[cite: 1]
+        // 历史未打卡日 (d < today)：计为断签 x_t == 0
         lastBrokenStreak = streak;
         streak = 0;
         final gamma = math.max(
@@ -238,7 +322,6 @@ class RsipEngine extends ChangeNotifier {
       return const NodeScoreResult();
     }
 
-    // 截取最近 W 天的滑动窗口[cite: 1]
     final int wLimit = _scoreConfig.windowSize.clamp(1, 1000);
     final List<int> recentWindow = windowEvents.length > wLimit
         ? windowEvents.sublist(windowEvents.length - wLimit)
@@ -246,11 +329,9 @@ class RsipEngine extends ChangeNotifier {
 
     final int nW = recentWindow.length;
 
-    // 1.1 短期连续势能指标 R = 1 - exp(-E / τ)[cite: 1]
     final double tau = _scoreConfig.tau <= 0.1 ? 14.0 : _scoreConfig.tau;
     final double rVal = (1.0 - math.exp(-energy / tau)).clamp(0.0, 1.0);
 
-    // 1.2 历史结构质量指标 H = Σ(len_k ^ p) / (N_W + K) ^ p[cite: 1]
     double sumPow = 0.0;
     int currentRun = 0;
     final double p = _scoreConfig.powerP;
@@ -271,7 +352,6 @@ class RsipEngine extends ChangeNotifier {
     final double denom = math.pow(nW + _scoreConfig.coldStartK, p).toDouble();
     final double hVal = denom > 0 ? (sumPow / denom).clamp(0.0, 1.0) : 0.0;
 
-    // 总分 S = 100 * (w_R * R + w_H * H)[cite: 1]
     final double totalScore = (100.0 *
             (_scoreConfig.weightR * rVal + _scoreConfig.weightH * hVal))
         .clamp(0.0, 100.0);
@@ -293,6 +373,10 @@ class RsipEngine extends ChangeNotifier {
 
   Future<void> clearAllHistoryData() async {
     _history.clear();
+    _lastAutoPenaltyDate = null;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_keyLastPenaltyDate);
+
     for (final node in _nodes) {
       node.progress = 0;
       node.increaseCount = 0;
@@ -376,32 +460,37 @@ class RsipEngine extends ChangeNotifier {
     return a.year == b.year && a.month == b.month && a.day == b.day;
   }
 
-  /// 无论是正向打卡还是负面打卡，当天只要填写过，列表自动隐藏
+  /// 无论是正向打卡、负面打卡还是跳过，当天只要填写过，列表自动隐藏
   bool isNodeCompletedToday(FocusNodeModel node) {
     if (node.isPrompt) return false;
     final today = getEffectiveDate(DateTime.now());
     return _history.any((r) =>
         !r.isEdit &&
         r.nodeId == node.id &&
-        r.delta != 0 &&
+        (r.delta != 0 || r.isSkip) &&
         _isSameDay(getEffectiveDate(r.time), today));
   }
 
-  /// 节点今日是否处于“待办活跃”状态（今日尚未填写任何正负记录）
+  /// 节点今日是否处于“待办活跃”状态
   bool isNodeActiveToday(FocusNodeModel node) {
     if (node.isPrompt) return true;
     return !isNodeCompletedToday(node);
   }
 
   // ==========================================
-  // 标签管理 (增加与减少隔离)
+  // 标签管理 (增加、减少与跳过隔离)
   // ==========================================
 
-  List<String> getHistoricalTags({required bool isIncrease}) {
+  List<String> getHistoricalTags({required bool isIncrease, bool isSkip = false}) {
     final Set<String> tagSet = {};
     for (final record in _history) {
       if (record.isEdit) continue;
-      final match = isIncrease ? record.delta > 0 : record.delta < 0;
+      final bool match;
+      if (isSkip) {
+        match = record.isSkip;
+      } else {
+        match = !record.isSkip && (isIncrease ? record.delta > 0 : record.delta < 0);
+      }
       if (match && record.tags != null) {
         tagSet.addAll(record.tags!);
       }
@@ -679,7 +768,7 @@ class RsipEngine extends ChangeNotifier {
   }
 
   // ==========================================
-  // 打卡流水与修改
+  // 打卡流水（增加、减少、跳过）与修改
   // ==========================================
 
   void changeProgress(
@@ -731,6 +820,38 @@ class RsipEngine extends ChangeNotifier {
     _saveToStorage();
   }
 
+  /// 跳过国策（必须附带原因，不计入增减与断签，当天在列表隐藏）
+  void skipNode(
+    String id, {
+    required String reason,
+    List<String>? tags,
+    DateTime? recordDate,
+  }) {
+    final target = _nodes.firstWhere((n) => n.id == id);
+    if (target.isPrompt) return;
+
+    final trimmedReason = reason.trim();
+    if (trimmedReason.isNotEmpty) {
+      target.latestNote = trimmedReason;
+    }
+
+    _history.add(
+      ProgressRecord(
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        nodeId: target.id,
+        nodeTitle: target.title,
+        delta: 0,
+        resultProgress: target.progress,
+        isSkip: true,
+        note: trimmedReason,
+        tags: (tags != null && tags.isNotEmpty) ? tags : null,
+        time: recordDate ?? DateTime.now(),
+      ),
+    );
+    notifyListeners();
+    _saveToStorage();
+  }
+
   void updateRecord({
     required String recordId,
     required DateTime newDate,
@@ -746,7 +867,7 @@ class RsipEngine extends ChangeNotifier {
     final nodeIndex = _nodes.indexWhere((n) => n.id == oldRecord.nodeId);
     if (nodeIndex != -1) {
       final node = _nodes[nodeIndex];
-      if (newAttributeDeltas != null) {
+      if (newAttributeDeltas != null && !oldRecord.isSkip) {
         for (final attr in node.numericAttributes) {
           final oldVal = oldRecord.attributeDeltas?[attr.name] ?? 0.0;
           final newVal = newAttributeDeltas[attr.name] ?? 0.0;
@@ -769,6 +890,7 @@ class RsipEngine extends ChangeNotifier {
       attributeDeltas: newAttributeDeltas,
       revision: oldRecord.revision,
       isEdit: oldRecord.isEdit,
+      isSkip: oldRecord.isSkip,
       oldTitle: oldRecord.oldTitle,
       newTitle: oldRecord.newTitle,
       oldContent: oldRecord.oldContent,
@@ -791,21 +913,23 @@ class RsipEngine extends ChangeNotifier {
     final nodeIndex = _nodes.indexWhere((n) => n.id == record.nodeId);
     if (nodeIndex != -1) {
       final node = _nodes[nodeIndex];
-      node.progress -= record.delta;
-      if (record.delta > 0) {
-        node.increaseCount = (node.increaseCount - 1).clamp(0, 999999);
-      } else if (record.delta < 0) {
-        node.decreaseCount = (node.decreaseCount - 1).clamp(0, 999999);
-      }
+      if (!record.isSkip) {
+        node.progress -= record.delta;
+        if (record.delta > 0) {
+          node.increaseCount = (node.increaseCount - 1).clamp(0, 999999);
+        } else if (record.delta < 0) {
+          node.decreaseCount = (node.decreaseCount - 1).clamp(0, 999999);
+        }
 
-      if (record.attributeDeltas != null) {
-        for (final entry in record.attributeDeltas!.entries) {
-          final attrIndex =
-              node.numericAttributes.indexWhere((a) => a.name == entry.key);
-          if (attrIndex != -1) {
-            final attr = node.numericAttributes[attrIndex];
-            attr.totalValue -= entry.value;
-            attr.count = (attr.count - 1).clamp(0, 999999);
+        if (record.attributeDeltas != null) {
+          for (final entry in record.attributeDeltas!.entries) {
+            final attrIndex =
+                node.numericAttributes.indexWhere((a) => a.name == entry.key);
+            if (attrIndex != -1) {
+              final attr = node.numericAttributes[attrIndex];
+              attr.totalValue -= entry.value;
+              attr.count = (attr.count - 1).clamp(0, 999999);
+            }
           }
         }
       }

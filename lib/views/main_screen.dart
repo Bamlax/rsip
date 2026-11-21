@@ -42,6 +42,23 @@ class _MainScreenState extends State<MainScreen> {
             backgroundColor: AppTheme.surfaceWhite,
             elevation: 0,
             scrolledUnderElevation: 0,
+            automaticallyImplyLeading: false,
+            // 归档界面：左边取消
+            leadingWidth: inArchiveMode ? 68 : null,
+            leading: inArchiveMode
+                ? TextButton(
+                    onPressed: () => widget.engine.cancelArchiveMode(),
+                    child: const Text(
+                      '取消',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.black54,
+                      ),
+                    ),
+                  )
+                : null,
+            centerTitle: inArchiveMode,
             title: inGroupMode
                 ? Row(
                     children: [
@@ -62,23 +79,13 @@ class _MainScreenState extends State<MainScreen> {
                     ],
                   )
                 : inArchiveMode
-                ? Row(
-                    children: [
-                      const Icon(
-                        Icons.archive_outlined,
-                        size: 20,
-                        color: AppTheme.primaryBlue,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        '归档管理 (已勾选 ${widget.engine.archiveSelectedIds.length} 项)',
-                        style: const TextStyle(
-                          color: AppTheme.deepNavy,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ],
+                ? Text(
+                    '归档管理 (${widget.engine.archiveSelectedIds.length})',
+                    style: const TextStyle(
+                      color: AppTheme.deepNavy,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                    ),
                   )
                 : selectedConnection != null
                 ? const Row(
@@ -131,7 +138,6 @@ class _MainScreenState extends State<MainScreen> {
               SettingsView(engine: widget.engine),
             ],
           ),
-          // 列表界面（0）与树界面（1）均显示添加按钮
           floatingActionButton: ((_currentViewIndex == 0 || _currentViewIndex == 1) &&
                   !inArchiveMode &&
                   !inGroupMode)
@@ -263,16 +269,10 @@ class _MainScreenState extends State<MainScreen> {
     bool inGroupMode,
     bool inArchiveMode,
   ) {
-    // 1. 归档打勾选择模式
+    // 1. 归档模式：右边完成（取消已在左边 leading）
     if (inArchiveMode) {
       return [
-        IconButton(
-          icon: const Icon(
-            Icons.check_circle_rounded,
-            color: AppTheme.primaryBlue,
-            size: 26,
-          ),
-          tooltip: '完成归档',
+        TextButton(
           onPressed: () {
             widget.engine.saveArchiveSelections();
             ScaffoldMessenger.of(context).showSnackBar(
@@ -282,11 +282,14 @@ class _MainScreenState extends State<MainScreen> {
               ),
             );
           },
-        ),
-        IconButton(
-          icon: const Icon(Icons.close, color: Colors.black45),
-          tooltip: '取消',
-          onPressed: () => widget.engine.cancelArchiveMode(),
+          child: const Text(
+            '完成',
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w800,
+              color: AppTheme.primaryBlue,
+            ),
+          ),
         ),
         const SizedBox(width: 4),
       ];
@@ -325,7 +328,7 @@ class _MainScreenState extends State<MainScreen> {
       ];
     }
 
-    // 4. 选中节点态（已去掉最右侧叉号按钮）
+    // 4. 选中节点态：增加、减少、跳过、详情
     if (selectedNode != null) {
       if (selectedNode.isPrompt) {
         return [
@@ -349,12 +352,20 @@ class _MainScreenState extends State<MainScreen> {
             Icons.remove_circle_outline,
             color: Colors.redAccent,
           ),
-          tooltip: '进度 -1',
+          tooltip: '减少',
           onPressed: () => _handleProgressChange(selectedNode, -1),
         ),
         IconButton(
+          icon: Icon(
+            Icons.skip_next_rounded,
+            color: Colors.blueGrey.shade700,
+          ),
+          tooltip: '跳过（填写原因）',
+          onPressed: () => _handleSkipNode(selectedNode),
+        ),
+        IconButton(
           icon: const Icon(Icons.add_circle_outline, color: Colors.green),
-          tooltip: '进度 +1',
+          tooltip: '增加',
           onPressed: () => _handleProgressChange(selectedNode, 1),
         ),
         IconButton(
@@ -624,6 +635,29 @@ class _MainScreenState extends State<MainScreen> {
       }
     } else {
       widget.engine.changeProgress(node.id, delta);
+      widget.engine.selectNode(null);
+    }
+  }
+
+  /// 跳过国策处理（弹出必填原因窗口，提交后自动关闭顶部栏）
+  Future<void> _handleSkipNode(FocusNodeModel node) async {
+    final result = await showDialog<ProgressSubmitData?>(
+      context: context,
+      builder: (ctx) => ProgressNoteDialog(
+        nodeTitle: node.title,
+        delta: 0,
+        isSkip: true,
+        attributes: const [],
+        engine: widget.engine,
+      ),
+    );
+    if (result != null && result.note != null && result.note!.isNotEmpty) {
+      widget.engine.skipNode(
+        node.id,
+        reason: result.note!,
+        tags: result.tags,
+        recordDate: result.date,
+      );
       widget.engine.selectNode(null);
     }
   }

@@ -17,7 +17,7 @@ class NodeListView extends StatelessWidget {
   Widget build(BuildContext context) {
     final allNormalNodes = engine.nodes.where((n) => !n.isPrompt).toList();
 
-    // 1. 归档打勾选择模式
+    // 1. 归档管理模式（颜色深浅标定归档状态，无左侧打钩栏）
     if (engine.isArchiveMode) {
       if (allNormalNodes.isEmpty) {
         return const Center(
@@ -25,88 +25,153 @@ class NodeListView extends StatelessWidget {
         );
       }
 
-      return ListView.builder(
-        padding: const EdgeInsets.only(top: 0, bottom: 24),
-        itemCount: allNormalNodes.length,
-        itemBuilder: (context, index) {
-          final node = allNormalNodes[index];
-          final isChecked = engine.archiveSelectedIds.contains(node.id);
+      final archivedCount = engine.archiveSelectedIds.length;
+      final activeCount = allNormalNodes.length - archivedCount;
 
-          return Container(
+      return Column(
+        children: [
+          // 顶部说明与状态图例栏
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             decoration: const BoxDecoration(
-              color: AppTheme.surfaceWhite,
-              border: Border(bottom: BorderSide(color: AppTheme.borderLight, width: 0.8)),
+              color: AppTheme.bgCanvas,
+              border: Border(bottom: BorderSide(color: AppTheme.borderLight)),
             ),
-            child: InkWell(
-              onTap: () => engine.toggleArchiveSelection(node.id),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                child: Row(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  '点击卡片切换状态',
+                  style: TextStyle(fontSize: 12, color: Colors.black54, fontWeight: FontWeight.w500),
+                ),
+                Row(
                   children: [
-                    Checkbox(
-                      value: isChecked,
-                      activeColor: AppTheme.primaryBlue,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
-                      onChanged: (_) => engine.toggleArchiveSelection(node.id),
+                    Container(
+                      width: 10,
+                      height: 10,
+                      decoration: BoxDecoration(
+                        color: AppTheme.surfaceWhite,
+                        borderRadius: BorderRadius.circular(2),
+                        border: Border.all(color: Colors.black26),
+                      ),
                     ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
+                    Text(
+                      ' 正常($activeCount)   ',
+                      style: const TextStyle(fontSize: 11, color: Colors.black54),
+                    ),
+                    Container(
+                      width: 10,
+                      height: 10,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFCBD5E1),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                    Text(
+                      ' 已归档($archivedCount)',
+                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF475569)),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+
+          // 国策列表（深色表示已归档，浅亮色表示正常显示）
+          Expanded(
+            child: ListView.separated(
+              padding: const EdgeInsets.only(top: 0, bottom: 24),
+              itemCount: allNormalNodes.length,
+              separatorBuilder: (_, __) =>
+                  const Divider(height: 1, thickness: 0.8, color: AppTheme.borderLight),
+              itemBuilder: (context, index) {
+                final node = allNormalNodes[index];
+                final isArchived = engine.archiveSelectedIds.contains(node.id);
+                final scoreRes = engine.getNodeScore(node.id);
+
+                return InkWell(
+                  onTap: () => engine.toggleArchiveSelection(node.id),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                    // 深色标定已归档，浅亮白底标定正常活跃
+                    color: isArchived
+                        ? const Color(0xFFD8E0E8)
+                        : AppTheme.surfaceWhite,
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Flexible(
-                                child: Text(
-                                  node.title,
+                              Text(
+                                node.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w800,
+                                  color: isArchived
+                                      ? const Color(0xFF475569)
+                                      : AppTheme.deepNavy,
+                                ),
+                              ),
+                              if (node.content.isNotEmpty) ...[
+                                const SizedBox(height: 4),
+                                Text(
+                                  node.content,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: TextStyle(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w800,
-                                    color: isChecked ? Colors.black45 : AppTheme.deepNavy,
-                                    decoration: isChecked ? TextDecoration.lineThrough : null,
-                                  ),
-                                ),
-                              ),
-                              if (node.isArchived) ...[
-                                const SizedBox(width: 6),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-                                  decoration: BoxDecoration(
-                                    color: Colors.black.withValues(alpha: 0.05),
-                                    borderRadius: BorderRadius.circular(4),
-                                  ),
-                                  child: const Text(
-                                    '当前已归档',
-                                    style: TextStyle(fontSize: 10, color: Colors.black45),
+                                    fontSize: 12,
+                                    color: isArchived
+                                        ? const Color(0xFF64748B)
+                                        : Colors.black54,
                                   ),
                                 ),
                               ],
                             ],
                           ),
-                          if (node.content.isNotEmpty) ...[
-                            const SizedBox(height: 4),
-                            Text(
-                              node.content,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(fontSize: 12, color: Colors.black38),
+                        ),
+                        const SizedBox(width: 12),
+                        // 右侧状态与分数胶囊
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: isArchived
+                                ? const Color(0xFF64748B)
+                                : AppTheme.bgCanvas,
+                            borderRadius: BorderRadius.circular(6),
+                            border: isArchived
+                                ? null
+                                : Border.all(color: AppTheme.borderLight),
+                          ),
+                          child: Text(
+                            isArchived
+                                ? '已归档'
+                                : '${scoreRes.score.toStringAsFixed(1)}分',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: isArchived
+                                  ? Colors.white
+                                  : AppTheme.deepNavy,
                             ),
-                          ],
-                        ],
-                      ),
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
-              ),
+                  ),
+                );
+              },
             ),
-          );
-        },
+          ),
+        ],
       );
     }
 
-    // 2. 常规列表：排除已归档国策及今日已完成记录的国策
+    // 2. 常规列表：排除已归档国策及今日已完成/跳过的国策
     final visibleNodes = allNormalNodes
         .where((n) => !n.isArchived && engine.isNodeActiveToday(n))
         .toList();
@@ -124,12 +189,12 @@ class NodeListView extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Text(
-              hasActiveNodes ? '今日待办国策已全部记录' : '暂无国策节点',
+              hasActiveNodes ? '今日待办国策已全部处理' : '暂无国策节点',
               style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: AppTheme.deepNavy),
             ),
             const SizedBox(height: 4),
             Text(
-              hasActiveNodes ? '今日已记录的节点可在「树」界面查看' : '点击右下角按钮添加国策，长按可上下拖拽排序',
+              hasActiveNodes ? '今日已记录或跳过的节点可在「树」界面查看' : '点击右下角按钮添加国策，长按可上下拖拽排序',
               style: const TextStyle(fontSize: 12, color: Colors.black38),
             ),
           ],

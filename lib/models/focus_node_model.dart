@@ -1,13 +1,13 @@
-/// 习惯连续性打分算法参数配置[cite: 1]
+/// 习惯连续性打分算法参数配置
 class HabitScoreConfig {
-  int windowSize; // W: 滑动窗口天数 (默认 90)[cite: 1]
-  double tau; // τ: 连续饱和尺度 (默认 14.0)[cite: 1]
-  double gammaBase; // γ_base: 基础能量保留率 (默认 0.85)[cite: 1]
-  double kDrop; // k_drop: 连击衰减斜率 (默认 0.005)[cite: 1]
-  double gammaMin; // γ_min: 保留率下限保底 (默认 0.35)[cite: 1]
-  double powerP; // p: 分段幂次 (默认 1.5)[cite: 1]
-  int coldStartK; // K: 冷启动常数 (默认 7)[cite: 1]
-  double weightR; // w_R: 短期势能权重 (默认 0.60, w_H = 1 - w_R = 0.40)[cite: 1]
+  int windowSize; // W: 滑动窗口天数 (默认 90)
+  double tau; // τ: 连续饱和尺度 (默认 14.0)
+  double gammaBase; // γ_base: 基础能量保留率 (默认 0.85)
+  double kDrop; // k_drop: 连击衰减斜率 (默认 0.005)
+  double gammaMin; // γ_min: 保留率下限保底 (默认 0.35)
+  double powerP; // p: 分段幂次 (默认 1.5)
+  int coldStartK; // K: 冷启动常数 (默认 7)
+  double weightR; // w_R: 短期势能权重 (默认 0.60, w_H = 1 - w_R = 0.40)
 
   HabitScoreConfig({
     this.windowSize = 90,
@@ -57,15 +57,15 @@ class HabitScoreConfig {
       );
 }
 
-/// 单个节点的打分评估结果[cite: 1]
+/// 单个节点的打分评估结果
 class NodeScoreResult {
-  final double score; // 总分 S ∈ [0, 100][cite: 1]
-  final double energy; // 当前连续能量 E_t[cite: 1]
-  final int streak; // 当前连续天数 c[cite: 1]
-  final int lastBrokenStreak; // 最近一次断签前的连击天数 c_prev[cite: 1]
-  final double rValue; // 当前连续势能指标 R ∈ [0, 1][cite: 1]
-  final double hValue; // 历史结构质量指标 H ∈ [0, 1][cite: 1]
-  final bool justBrokeStreak; // 最近一次结算是否为长连击断签
+  final double score; // 总分 S ∈ [0, 100]
+  final double energy; // 当前连续能量 E_t
+  final int streak; // 当前连续天数 c
+  final int lastBrokenStreak; // 最近一次断签前的连击天数 c_prev
+  final double rValue; // 当前连续势能指标 R ∈ [0, 1]
+  final double hValue; // 历史结构质量指标 H ∈ [0, 1]
+  final bool justBrokeStreak;
 
   const NodeScoreResult({
     this.score = 0.0,
@@ -160,7 +160,6 @@ class FocusNodeModel {
   bool isArchived;
   String? latestNote;
 
-  // 节点自定义备注弹窗开关
   bool promptNoteOnIncrease;
   bool promptNoteOnDecrease;
 
@@ -313,6 +312,7 @@ class ProgressRecord {
   final Map<String, double>? attributeDeltas;
   final int? revision;
   final bool isEdit;
+  final bool isSkip; // 新增：是否为跳过记录
   final String? oldTitle;
   final String? newTitle;
   final String? oldContent;
@@ -331,6 +331,7 @@ class ProgressRecord {
     this.attributeDeltas,
     this.revision,
     this.isEdit = false,
+    this.isSkip = false,
     this.oldTitle,
     this.newTitle,
     this.oldContent,
@@ -350,6 +351,7 @@ class ProgressRecord {
         'attributeDeltas': attributeDeltas,
         'revision': revision,
         'isEdit': isEdit,
+        'isSkip': isSkip,
         'oldTitle': oldTitle,
         'newTitle': newTitle,
         'oldContent': oldContent,
@@ -374,6 +376,7 @@ class ProgressRecord {
             : null,
         revision: json['revision'] as int?,
         isEdit: json['isEdit'] as bool? ?? false,
+        isSkip: json['isSkip'] as bool? ?? false,
         oldTitle: json['oldTitle'] as String?,
         newTitle: json['newTitle'] as String?,
         oldContent: json['oldContent'] as String?,

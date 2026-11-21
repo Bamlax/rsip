@@ -168,7 +168,10 @@ class _HistoryViewState extends State<HistoryView> {
 
   Widget _buildSeamlessHistoryRow(ProgressRecord record) {
     final isGain = record.delta > 0;
-    final rowBgColor = isGain ? const Color(0xFFF2FBF4) : const Color(0xFFFDF3F3);
+    final isSkip = record.isSkip;
+    final rowBgColor = isSkip
+        ? const Color(0xFFF1F5F9)
+        : (isGain ? const Color(0xFFF2FBF4) : const Color(0xFFFDF3F3));
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -191,13 +194,16 @@ class _HistoryViewState extends State<HistoryView> {
                   ),
                 ),
               ),
-              // 右侧去掉了时间显示，直接展现当前净值
               Text(
-                '净值 ${record.resultProgress >= 0 ? "+${record.resultProgress}" : record.resultProgress}',
+                isSkip
+                    ? '已跳过'
+                    : '净值 ${record.resultProgress >= 0 ? "+${record.resultProgress}" : record.resultProgress}',
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w800,
-                  color: ProgressColorHelper.getColor(record.resultProgress),
+                  color: isSkip
+                      ? Colors.blueGrey.shade700
+                      : ProgressColorHelper.getColor(record.resultProgress),
                 ),
               ),
             ],
@@ -233,7 +239,9 @@ class _HistoryViewState extends State<HistoryView> {
                     color: Colors.white.withValues(alpha: 0.7),
                     borderRadius: BorderRadius.circular(4),
                     border: Border.all(
-                      color: isGain ? Colors.green.shade200 : Colors.red.shade200,
+                      color: isSkip
+                          ? Colors.blueGrey.shade200
+                          : (isGain ? Colors.green.shade200 : Colors.red.shade200),
                       width: 0.8,
                     ),
                   ),
@@ -242,7 +250,9 @@ class _HistoryViewState extends State<HistoryView> {
                     style: TextStyle(
                       fontSize: 10,
                       fontWeight: FontWeight.w700,
-                      color: isGain ? Colors.green.shade800 : Colors.red.shade800,
+                      color: isSkip
+                          ? Colors.blueGrey.shade800
+                          : (isGain ? Colors.green.shade800 : Colors.red.shade800),
                     ),
                   ),
                 );
