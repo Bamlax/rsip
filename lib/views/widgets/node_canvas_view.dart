@@ -263,7 +263,8 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
                 // 2. 分类大框层
                 for (final group in groups)
                   if (groupRects.containsKey(group.id))
-                    _buildGroupBoundingBox(group, groupRects[group.id]!, nodePositions),
+                    _buildGroupBoundingBox(
+                        group, groupRects[group.id]!, nodePositions),
 
                 // 3. 国策卡片层
                 for (final node in nodes)
@@ -282,21 +283,32 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
     Rect rect,
     Map<String, Offset> positions,
   ) {
+    final isCountMode = widget.engine.displayMode == 1;
     final groupNodes = widget.engine.nodes
         .where((n) => group.nodeIds.contains(n.id) && !n.isPrompt)
         .toList();
 
     double avgScore = 0.0;
+    int totalInc = 0;
+    int totalDec = 0;
+
     if (groupNodes.isNotEmpty) {
       final sumScore = groupNodes.fold<double>(
         0.0,
         (sum, n) => sum + widget.engine.getNodeScore(n.id).score,
       );
       avgScore = sumScore / groupNodes.length;
+      for (final n in groupNodes) {
+        totalInc += n.increaseCount;
+        totalDec += n.decreaseCount;
+      }
     }
 
     final scoreColor = ProgressColorHelper.getScoreColor(avgScore);
     final scoreBg = ProgressColorHelper.getScoreBgColor(avgScore);
+    final incTextColor = ProgressColorHelper.getIncreaseColor(totalInc);
+    final incBgColor = ProgressColorHelper.getIncreaseBgColor(totalInc);
+
     final isGroupDragging = _draggingGroupId == group.id;
     final isConnectSelected = group.id == _connectStartId;
 
@@ -310,21 +322,27 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
         onTap: () => _onGroupTap(group),
         onLongPressStart: (details) {
           HapticFeedback.mediumImpact();
-          final renderBox = _canvasKey.currentContext?.findRenderObject() as RenderBox?;
+          final renderBox =
+              _canvasKey.currentContext?.findRenderObject() as RenderBox?;
           if (renderBox != null) {
-            _groupDragStartFingerPos = renderBox.globalToLocal(details.globalPosition);
+            _groupDragStartFingerPos =
+                renderBox.globalToLocal(details.globalPosition);
             _groupDragStartPositions = {
-              for (final n in widget.engine.nodes.where((n) => group.nodeIds.contains(n.id)))
+              for (final n in widget.engine.nodes
+                  .where((n) => group.nodeIds.contains(n.id)))
                 n.id: positions[n.id]!
             };
             setState(() => _draggingGroupId = group.id);
           }
         },
         onLongPressMoveUpdate: (details) {
-          if (_groupDragStartFingerPos != null && _groupDragStartPositions != null) {
-            final renderBox = _canvasKey.currentContext?.findRenderObject() as RenderBox?;
+          if (_groupDragStartFingerPos != null &&
+              _groupDragStartPositions != null) {
+            final renderBox =
+                _canvasKey.currentContext?.findRenderObject() as RenderBox?;
             if (renderBox != null) {
-              final currentFinger = renderBox.globalToLocal(details.globalPosition);
+              final currentFinger =
+                  renderBox.globalToLocal(details.globalPosition);
               final delta = currentFinger - _groupDragStartFingerPos!;
               for (final entry in _groupDragStartPositions!.entries) {
                 final initPos = entry.value;
@@ -374,24 +392,60 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: scoreBg,
-                        borderRadius: BorderRadius.circular(6),
-                        border: Border.all(
-                          color: scoreColor.withValues(alpha: 0.35),
+                    if (isCountMode) ...[
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: incBgColor,
+                          borderRadius: BorderRadius.circular(5),
+                        ),
+                        child: Text(
+                          '+$totalInc',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                            color: incTextColor,
+                          ),
                         ),
                       ),
-                      child: Text(
-                        '均 ${avgScore.toStringAsFixed(1)}分',
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w800,
-                          color: scoreColor,
+                      const SizedBox(width: 4),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.red.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(5),
+                        ),
+                        child: Text(
+                          '-$totalDec',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                            color: Colors.red.shade700,
+                          ),
                         ),
                       ),
-                    ),
+                    ] else
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: scoreBg,
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                            color: scoreColor.withValues(alpha: 0.35),
+                          ),
+                        ),
+                        child: Text(
+                          '均 ${avgScore.toStringAsFixed(1)}分',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                            color: scoreColor,
+                          ),
+                        ),
+                      ),
                     const SizedBox(width: 6),
                     GestureDetector(
                       onTap: () => _confirmDeleteGroup(group),
@@ -401,7 +455,8 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
                           color: Colors.black.withValues(alpha: 0.06),
                           shape: BoxShape.circle,
                         ),
-                        child: const Icon(Icons.close, size: 12, color: Colors.black45),
+                        child: const Icon(Icons.close,
+                            size: 12, color: Colors.black45),
                       ),
                     ),
                   ],
@@ -416,7 +471,8 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
 
   Widget _buildNodeCardWrapper(FocusNodeModel node, Offset pos) {
     final isSelectedSingle = node.id == widget.engine.selectedNodeId;
-    final isHighlightedGroup = widget.engine.groupSelectedNodeIds.contains(node.id);
+    final isHighlightedGroup =
+        widget.engine.groupSelectedNodeIds.contains(node.id);
     final isDragging = _draggingNodeId == node.id;
     final isConnectSelected = node.id == _connectStartId;
 
@@ -426,9 +482,11 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
       child: GestureDetector(
         onTap: () => _onNodeTap(node),
         onPanStart: (details) {
-          final renderBox = _canvasKey.currentContext?.findRenderObject() as RenderBox?;
+          final renderBox =
+              _canvasKey.currentContext?.findRenderObject() as RenderBox?;
           if (renderBox != null) {
-            _nodeDragStartFingerPos = renderBox.globalToLocal(details.globalPosition);
+            _nodeDragStartFingerPos =
+                renderBox.globalToLocal(details.globalPosition);
             _nodeDragStartPos = pos;
             setState(() => _draggingNodeId = node.id);
           }
@@ -437,14 +495,18 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
           if (_draggingNodeId == node.id &&
               _nodeDragStartFingerPos != null &&
               _nodeDragStartPos != null) {
-            final renderBox = _canvasKey.currentContext?.findRenderObject() as RenderBox?;
+            final renderBox =
+                _canvasKey.currentContext?.findRenderObject() as RenderBox?;
             if (renderBox != null) {
-              final currentFingerPos = renderBox.globalToLocal(details.globalPosition);
+              final currentFingerPos =
+                  renderBox.globalToLocal(details.globalPosition);
               final delta = currentFingerPos - _nodeDragStartFingerPos!;
               widget.engine.updateNodePosition(
                 node.id,
-                (_nodeDragStartPos!.dx + delta.dx).clamp(50.0, _canvasWidth - 50.0),
-                (_nodeDragStartPos!.dy + delta.dy).clamp(50.0, _canvasHeight - 50.0),
+                (_nodeDragStartPos!.dx + delta.dx)
+                    .clamp(50.0, _canvasWidth - 50.0),
+                (_nodeDragStartPos!.dy + delta.dy)
+                    .clamp(50.0, _canvasHeight - 50.0),
               );
             }
           }
@@ -460,7 +522,8 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
           _nodeDragStartFingerPos = null;
         }),
         child: node.isPrompt
-            ? _buildPromptNodeCard(node, isSelectedSingle, isHighlightedGroup, isDragging)
+            ? _buildPromptNodeCard(
+                node, isSelectedSingle, isHighlightedGroup, isDragging)
             : _buildNormalNodeCard(
                 node,
                 isSelectedSingle || isConnectSelected,
@@ -477,11 +540,21 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
     bool isHighlightedGroup,
     bool isDragging,
   ) {
+    final isCountMode = widget.engine.displayMode == 1;
     final scoreRes = widget.engine.getNodeScore(node.id);
     final scoreColor = ProgressColorHelper.getScoreColor(scoreRes.score);
     final scoreBg = ProgressColorHelper.getScoreBgColor(scoreRes.score);
+
+    final incTextColor = ProgressColorHelper.getIncreaseColor(node.increaseCount);
+    final incBgColor = ProgressColorHelper.getIncreaseBgColor(node.increaseCount);
+    final progColor = ProgressColorHelper.getColor(node.progress);
+    final progBg = ProgressColorHelper.getBgColor(node.progress);
+
+    final activeBorderColor = isCountMode ? progColor : scoreColor;
+    final activeTintBg = isCountMode ? progBg : scoreBg;
+
     final solidBgColor = Color.alphaBlend(
-      scoreBg.withValues(alpha: 0.55),
+      activeTintBg.withValues(alpha: 0.55),
       AppTheme.surfaceWhite,
     );
     final isHighlighted = isSelectedSingle || isHighlightedGroup;
@@ -507,7 +580,7 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
                 ? AppTheme.skyBlue
                 : isHighlighted
                     ? AppTheme.primaryBlue
-                    : scoreColor.withValues(alpha: 0.55),
+                    : activeBorderColor.withValues(alpha: 0.55),
             width: 1.5,
           ),
           boxShadow: [
@@ -516,7 +589,7 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
                   ? AppTheme.primaryBlue.withValues(alpha: 0.35)
                   : isHighlighted
                       ? AppTheme.primaryBlue.withValues(alpha: 0.2)
-                      : scoreColor.withValues(alpha: 0.08),
+                      : activeBorderColor.withValues(alpha: 0.08),
               blurRadius: (isDragging || isHighlighted) ? 8 : 4,
               offset: const Offset(0, 2),
             ),
@@ -542,25 +615,66 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
                         ),
                       ),
                     ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
-                      decoration: BoxDecoration(
-                        color: scoreBg,
-                        borderRadius: BorderRadius.circular(4),
-                        border: Border.all(
-                          color: scoreColor.withValues(alpha: 0.3),
-                          width: 0.8,
+                    if (isCountMode)
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 5, vertical: 1.5),
+                            decoration: BoxDecoration(
+                              color: incBgColor,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              '+${node.increaseCount}',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w900,
+                                color: incTextColor,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 3),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 5, vertical: 1.5),
+                            decoration: BoxDecoration(
+                              color: Colors.red.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              '-${node.decreaseCount}',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w900,
+                                color: Colors.red.shade700,
+                              ),
+                            ),
+                          ),
+                        ],
+                      )
+                    else
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 1.5),
+                        decoration: BoxDecoration(
+                          color: scoreBg,
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(
+                            color: scoreColor.withValues(alpha: 0.3),
+                            width: 0.8,
+                          ),
+                        ),
+                        child: Text(
+                          '${scoreRes.score.toStringAsFixed(1)}分',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w900,
+                            color: scoreColor,
+                          ),
                         ),
                       ),
-                      child: Text(
-                        '${scoreRes.score.toStringAsFixed(1)}分',
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w900,
-                          color: scoreColor,
-                        ),
-                      ),
-                    ),
                   ],
                 ),
                 const SizedBox(height: 4),
@@ -568,7 +682,8 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
                   node.content.isEmpty ? '（无详细内容）' : node.content,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 11, color: Colors.black54, height: 1.25),
+                  style: const TextStyle(
+                      fontSize: 11, color: Colors.black54, height: 1.25),
                 ),
               ],
             ),
@@ -576,7 +691,8 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
               const Positioned(
                 right: 0,
                 bottom: 0,
-                child: Icon(Icons.check_circle, size: 16, color: AppTheme.primaryBlue),
+                child: Icon(Icons.check_circle,
+                    size: 16, color: AppTheme.primaryBlue),
               ),
           ],
         ),
@@ -638,7 +754,8 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
             const Positioned(
               right: 0,
               bottom: 0,
-              child: Icon(Icons.check_circle, size: 14, color: AppTheme.primaryBlue),
+              child: Icon(Icons.check_circle,
+                  size: 14, color: AppTheme.primaryBlue),
             ),
         ],
       ),
@@ -652,8 +769,10 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
     final widgets = <Widget>[];
 
     for (final conn in widget.engine.connections) {
-      final fromNode = widget.engine.nodes.where((n) => n.id == conn.fromId).firstOrNull;
-      final toNode = widget.engine.nodes.where((n) => n.id == conn.toId).firstOrNull;
+      final fromNode =
+          widget.engine.nodes.where((n) => n.id == conn.fromId).firstOrNull;
+      final toNode =
+          widget.engine.nodes.where((n) => n.id == conn.toId).firstOrNull;
 
       final isFaded = (fromNode != null && fromNode.isArchived) ||
           (toNode != null && toNode.isArchived);
@@ -693,7 +812,8 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
           ),
         );
 
-        final mid = Offset((fromCenter.dx + toCenter.dx) / 2, (fromCenter.dy + toCenter.dy) / 2);
+        final mid = Offset((fromCenter.dx + toCenter.dx) / 2,
+            (fromCenter.dy + toCenter.dy) / 2);
         widgets.add(
           Positioned(
             left: mid.dx - 18,

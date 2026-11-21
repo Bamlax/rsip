@@ -36,6 +36,15 @@ class VersionHistoryConfig {
 
   static const List<VersionRelease> releases = [
       VersionRelease(
+      version: '0.9.0',
+      releaseDate: '2026-11-21',
+      changeLogs: [
+        '新增：历史界面支持直接修改打卡加减',
+        '新增：加减和分数切换显示功能',
+        '新增：Webdav功能',
+      ],
+    ),
+      VersionRelease(
       version: '0.8.0',
       releaseDate: '2026-11-16',
       changeLogs: [

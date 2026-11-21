@@ -19,40 +19,42 @@ class EditRecordDialog extends StatefulWidget {
 
 class _EditRecordDialogState extends State<EditRecordDialog> {
   late final TextEditingController _noteController;
-  final _tagInputController = TextEditingController();
+  final _tagController = TextEditingController();
   final Map<String, TextEditingController> _attrControllers = {};
+  late final Set<String> _selectedTags;
   late DateTime _selectedDate;
 
-  final Set<String> _selectedTags = {};
-  late List<String> _historicalTags;
-
-  String _formatNum(double val) {
-    return val % 1 == 0 ? val.toInt().toString() : val.toStringAsFixed(1);
-  }
+  // 0: 增加 (+1), 1: 减少 (-1), 2: 跳过
+  late int _polarityType;
+  String? _errorText;
 
   @override
   void initState() {
     super.initState();
     _noteController = TextEditingController(text: widget.record.note ?? '');
-    _selectedDate = widget.record.time;
+    _selectedTags = Set<String>.from(widget.record.tags ?? []);
+    _selectedDate = widget.engine.getEffectiveDate(widget.record.time);
 
-    final isIncrease = widget.record.delta > 0;
-    _historicalTags = widget.engine.getHistoricalTags(isIncrease: isIncrease);
-    if (widget.record.tags != null) {
-      _selectedTags.addAll(widget.record.tags!);
-      for (final t in widget.record.tags!) {
-        if (!_historicalTags.contains(t)) {
-          _historicalTags.add(t);
-        }
-      }
+    if (widget.record.isSkip) {
+      _polarityType = 2;
+    } else if (widget.record.delta < 0) {
+      _polarityType = 1;
+    } else {
+      _polarityType = 0;
     }
 
-    final node = widget.engine.nodes.where((n) => n.id == widget.record.nodeId).firstOrNull;
+    final node = widget.engine.nodes
+        .where((n) => n.id == widget.record.nodeId)
+        .firstOrNull;
     if (node != null) {
       for (final attr in node.numericAttributes) {
-        final currentVal = widget.record.attributeDeltas?[attr.name];
+        final existingVal = widget.record.attributeDeltas?[attr.name];
         _attrControllers[attr.name] = TextEditingController(
-          text: currentVal != null ? _formatNum(currentVal) : '',
+          text: existingVal != null
+              ? (existingVal % 1 == 0
+                  ? existingVal.toInt().toString()
+                  : existingVal.toString())
+              : '',
         );
       }
     }
@@ -61,198 +63,324 @@ class _EditRecordDialogState extends State<EditRecordDialog> {
   @override
   void dispose() {
     _noteController.dispose();
-    _tagInputController.dispose();
+    _tagController.dispose();
     for (final c in _attrControllers.values) {
       c.dispose();
     }
     super.dispose();
   }
 
+  void _addCustomTag() {
+    final tag = _tagController.text.trim();
+    if (tag.isNotEmpty) {
+      setState(() {
+        _selectedTags.add(tag);
+        _tagController.clear();
+      });
+    }
+  }
+
   Future<void> _pickDate() async {
     final picked = await showDatePicker(
       context: context,
       initialDate: _selectedDate,
-      firstDate: DateTime(2000),
-      lastDate: DateTime(2100),
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now().add(const Duration(days: 1)),
     );
     if (picked != null) {
-      setState(() => _selectedDate = picked);
+      setState(() {
+        _selectedDate = DateTime(picked.year, picked.month, picked.day);
+      });
     }
   }
 
-  String _formatDate(DateTime d) {
-    return '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
-  }
+  void _save() {
+    final noteText = _noteController.text.trim();
+    final isSkip = _polarityType == 2;
+    if (isSkip && noteText.isEmpty) {
+      setState(() => _errorText = '跳过记录需保留跳过原因');
+      return;
+    }
 
-  void _addNewTag() {
-    final text = _tagInputController.text.trim();
-    if (text.isEmpty) return;
-    setState(() {
-      _selectedTags.add(text);
-      if (!_historicalTags.contains(text)) {
-        _historicalTags.add(text);
+    final Map<String, double> attrDeltas = {};
+    if (!isSkip) {
+      for (final entry in _attrControllers.entries) {
+        final val = double.tryParse(entry.value.text.trim());
+        if (val != null && val != 0) {
+          attrDeltas[entry.key] = val;
+        }
       }
-      _tagInputController.clear();
-    });
+    }
+
+    final oldEff = widget.engine.getEffectiveDate(widget.record.time);
+    final isSameDate = oldEff.year == _selectedDate.year &&
+        oldEff.month == _selectedDate.month &&
+        oldEff.day == _selectedDate.day;
+    final finalTime = isSameDate ? widget.record.time : _selectedDate;
+
+    final int nextDelta = isSkip ? 0 : (_polarityType == 0 ? 1 : -1);
+
+    widget.engine.updateRecord(
+      recordId: widget.record.id,
+      newDate: finalTime,
+      newDelta: nextDelta,
+      newIsSkip: isSkip,
+      newNote: noteText,
+      newTags: _selectedTags.toList(),
+      newAttributeDeltas: attrDeltas,
+    );
+
+    Navigator.pop(context);
   }
 
   @override
   Widget build(BuildContext context) {
-    final node = widget.engine.nodes.where((n) => n.id == widget.record.nodeId).firstOrNull;
-    final isIncrease = widget.record.delta > 0;
-    final themeColor = isIncrease ? Colors.green.shade700 : Colors.red.shade700;
-    final activeTagBg = isIncrease ? const Color(0xFFDCFCE7) : const Color(0xFFFEE2E2);
+    final bool isGain = _polarityType == 0;
+    final bool isSkip = _polarityType == 2;
+
+    final Color themeColor = isSkip
+        ? Colors.blueGrey.shade700
+        : (isGain ? Colors.green.shade700 : Colors.red.shade700);
+
+    final historicalTags = widget.engine.getHistoricalTags(
+      isIncrease: isGain,
+      isSkip: isSkip,
+    );
+    final allDisplayTags = {...historicalTags, ..._selectedTags}.toList();
+
+    final dateStr =
+        '${_selectedDate.year}-${_selectedDate.month.toString().padLeft(2, '0')}-${_selectedDate.day.toString().padLeft(2, '0')}';
+
+    final node = widget.engine.nodes
+        .where((n) => n.id == widget.record.nodeId)
+        .firstOrNull;
 
     return AlertDialog(
       backgroundColor: AppTheme.surfaceWhite,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       title: Text(
-        '编辑记录 - ${widget.record.nodeTitle}',
-        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.deepNavy),
+        '编辑记录 · ${widget.record.nodeTitle}',
+        style: const TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.w800,
+          color: AppTheme.deepNavy,
+        ),
       ),
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            InkWell(
-              onTap: _pickDate,
-              borderRadius: BorderRadius.circular(8),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                decoration: BoxDecoration(
-                  color: AppTheme.bgCanvas,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: AppTheme.borderLight),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.calendar_today_rounded, size: 14, color: AppTheme.primaryBlue),
-                    const SizedBox(width: 8),
-                    const Text('归属日期：', style: TextStyle(fontSize: 12, color: Colors.black54)),
-                    Text(
-                      _formatDate(_selectedDate),
-                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppTheme.deepNavy),
-                    ),
-                    const Spacer(),
-                    const Icon(Icons.edit_calendar_rounded, size: 16, color: Colors.black38),
-                  ],
+      content: SizedBox(
+        width: double.maxFinite,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // 1. 记录加减性切换栏
+              const Text(
+                '记录类型（加减性）',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: AppTheme.deepNavy,
                 ),
               ),
-            ),
-            const SizedBox(height: 12),
-            const Text('心得与反思：', style: TextStyle(fontSize: 12, color: Colors.black45)),
-            const SizedBox(height: 6),
-            TextField(
-              controller: _noteController,
-              maxLines: 2,
-              decoration: InputDecoration(
-                hintText: '修改打卡心得或备注...',
-                hintStyle: const TextStyle(fontSize: 12, color: Colors.black38),
-                filled: true,
-                fillColor: AppTheme.bgCanvas,
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
-              ),
-            ),
-            const SizedBox(height: 12),
-
-            // 标签编辑
-            Text(isIncrease ? '增加标签：' : '减少标签：', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.deepNavy)),
-            const SizedBox(height: 6),
-            if (_historicalTags.isNotEmpty)
-              Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                children: _historicalTags.map((tag) {
-                  final isSelected = _selectedTags.contains(tag);
-                  return FilterChip(
-                    label: Text('#$tag'),
-                    selected: isSelected,
-                    showCheckmark: false,
-                    labelStyle: TextStyle(
-                      fontSize: 11,
-                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                      color: isSelected ? themeColor : Colors.black87,
-                    ),
-                    backgroundColor: AppTheme.bgCanvas,
-                    selectedColor: activeTagBg,
-                    side: BorderSide(
-                      color: isSelected ? themeColor.withValues(alpha: 0.4) : AppTheme.borderLight,
-                    ),
-                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
-                    visualDensity: VisualDensity.compact,
-                    onSelected: (val) {
-                      setState(() {
-                        if (val) {
-                          _selectedTags.add(tag);
-                        } else {
-                          _selectedTags.remove(tag);
-                        }
-                      });
-                    },
-                  );
-                }).toList(),
-              ),
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _tagInputController,
-                    decoration: InputDecoration(
-                      hintText: '输入新标签...',
-                      isDense: true,
-                      hintStyle: const TextStyle(fontSize: 11),
-                      filled: true,
-                      fillColor: AppTheme.bgCanvas,
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: BorderSide.none),
-                    ),
-                    onSubmitted: (_) => _addNewTag(),
-                  ),
-                ),
-                const SizedBox(width: 6),
-                IconButton(
-                  icon: const Icon(Icons.add_circle, color: AppTheme.primaryBlue, size: 22),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                  tooltip: '添加标签',
-                  onPressed: _addNewTag,
-                ),
-              ],
-            ),
-
-            if (node != null && node.numericAttributes.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              const Text('数值属性：', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.deepNavy)),
               const SizedBox(height: 6),
-              ...node.numericAttributes.map((attr) {
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
+              Row(
+                children: [
+                  _buildPolarityTab(
+                    label: '增加 (+1)',
+                    selected: _polarityType == 0,
+                    activeColor: Colors.green.shade700,
+                    activeBg: const Color(0xFFF2FBF4),
+                    onTap: () => setState(() {
+                      _polarityType = 0;
+                      _errorText = null;
+                    }),
+                  ),
+                  const SizedBox(width: 8),
+                  _buildPolarityTab(
+                    label: '减少 (-1)',
+                    selected: _polarityType == 1,
+                    activeColor: Colors.red.shade700,
+                    activeBg: const Color(0xFFFDF3F3),
+                    onTap: () => setState(() {
+                      _polarityType = 1;
+                      _errorText = null;
+                    }),
+                  ),
+                  const SizedBox(width: 8),
+                  _buildPolarityTab(
+                    label: '跳过',
+                    selected: _polarityType == 2,
+                    activeColor: Colors.blueGrey.shade700,
+                    activeBg: const Color(0xFFF1F5F9),
+                    onTap: () => setState(() => _polarityType = 2),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+
+              // 2. 归属日期选择
+              InkWell(
+                onTap: _pickDate,
+                borderRadius: BorderRadius.circular(8),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: AppTheme.bgCanvas,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
                   child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      SizedBox(
-                        width: 80,
-                        child: Text(attr.name, style: const TextStyle(fontSize: 12, color: Colors.black87)),
+                      const Text(
+                        '归属日期',
+                        style: TextStyle(fontSize: 12, color: Colors.black54),
                       ),
-                      Expanded(
-                        child: TextField(
-                          controller: _attrControllers[attr.name],
-                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                          decoration: InputDecoration(
-                            isDense: true,
-                            suffixText: attr.unit,
-                            filled: true,
-                            fillColor: AppTheme.bgCanvas,
-                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: BorderSide.none),
+                      Row(
+                        children: [
+                          Text(
+                            dateStr,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.deepNavy,
+                            ),
                           ),
-                        ),
+                          const SizedBox(width: 4),
+                          const Icon(Icons.calendar_today_rounded,
+                              size: 13, color: AppTheme.primaryBlue),
+                        ],
                       ),
                     ],
                   ),
-                );
-              }),
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              // 3. 备注输入
+              TextField(
+                controller: _noteController,
+                maxLines: 3,
+                onChanged: (_) {
+                  if (_errorText != null) {
+                    setState(() => _errorText = null);
+                  }
+                },
+                decoration: InputDecoration(
+                  labelText: isSkip ? '跳过原因（必填）' : '心得备注',
+                  errorText: _errorText,
+                  labelStyle: const TextStyle(fontSize: 13),
+                  alignLabelWithHint: true,
+                  filled: true,
+                  fillColor: AppTheme.bgCanvas,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+              ),
+
+              // 4. 数字属性
+              if (!isSkip && node != null && node.numericAttributes.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                const Text(
+                  '数值属性',
+                  style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: AppTheme.deepNavy),
+                ),
+                const SizedBox(height: 6),
+                ...node.numericAttributes.map((attr) {
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: TextField(
+                      controller: _attrControllers[attr.name],
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration: InputDecoration(
+                        labelText: '${attr.name} (${attr.unit})',
+                        isDense: true,
+                        labelStyle: const TextStyle(fontSize: 12),
+                        filled: true,
+                        fillColor: AppTheme.bgCanvas,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: BorderSide.none,
+                        ),
+                      ),
+                    ),
+                  );
+                }),
+              ],
+
+              // 5. 标签
+              const SizedBox(height: 12),
+              const Text(
+                '标签归因',
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: AppTheme.deepNavy),
+              ),
+              const SizedBox(height: 6),
+              if (allDisplayTags.isNotEmpty) ...[
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: allDisplayTags.map((tag) {
+                    final selected = _selectedTags.contains(tag);
+                    return FilterChip(
+                      label: Text('#$tag', style: const TextStyle(fontSize: 11)),
+                      selected: selected,
+                      selectedColor: themeColor.withValues(alpha: 0.15),
+                      checkmarkColor: themeColor,
+                      visualDensity: VisualDensity.compact,
+                      onSelected: (val) {
+                        setState(() {
+                          if (val) {
+                            _selectedTags.add(tag);
+                          } else {
+                            _selectedTags.remove(tag);
+                          }
+                        });
+                      },
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 8),
+              ],
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _tagController,
+                      onSubmitted: (_) => _addCustomTag(),
+                      decoration: InputDecoration(
+                        hintText: '输入新标签...',
+                        isDense: true,
+                        hintStyle: const TextStyle(fontSize: 11),
+                        filled: true,
+                        fillColor: AppTheme.bgCanvas,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(6),
+                          borderSide: BorderSide.none,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  TextButton(
+                    style: TextButton.styleFrom(
+                        visualDensity: VisualDensity.compact),
+                    onPressed: _addCustomTag,
+                    child: const Text('添加',
+                        style: TextStyle(
+                            fontSize: 12, color: AppTheme.primaryBlue)),
+                  ),
+                ],
+              ),
             ],
-          ],
+          ),
         ),
       ),
       actions: [
@@ -262,32 +390,50 @@ class _EditRecordDialogState extends State<EditRecordDialog> {
         ),
         ElevatedButton(
           style: ElevatedButton.styleFrom(
-            backgroundColor: AppTheme.primaryBlue,
+            backgroundColor: themeColor,
             foregroundColor: Colors.white,
             elevation: 0,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           ),
+          onPressed: _save,
           child: const Text('保存修改'),
-          onPressed: () {
-            final Map<String, double> deltas = {};
-            for (final entry in _attrControllers.entries) {
-              final val = double.tryParse(entry.value.text.trim());
-              if (val != null) {
-                deltas[entry.key] = val;
-              }
-            }
-
-            widget.engine.updateRecord(
-              recordId: widget.record.id,
-              newDate: _selectedDate,
-              newNote: _noteController.text,
-              newTags: _selectedTags.toList(),
-              newAttributeDeltas: deltas.isNotEmpty ? deltas : null,
-            );
-            Navigator.pop(context);
-          },
         ),
       ],
+    );
+  }
+
+  Widget _buildPolarityTab({
+    required String label,
+    required bool selected,
+    required Color activeColor,
+    required Color activeBg,
+    required VoidCallback onTap,
+  }) {
+    return Expanded(
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: selected ? activeBg : AppTheme.bgCanvas,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: selected ? activeColor : AppTheme.borderLight,
+              width: selected ? 1.4 : 1.0,
+            ),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: selected ? FontWeight.w800 : FontWeight.w500,
+              color: selected ? activeColor : Colors.black54,
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

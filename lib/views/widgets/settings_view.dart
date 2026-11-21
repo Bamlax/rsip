@@ -10,6 +10,109 @@ class SettingsView extends StatelessWidget {
 
   const SettingsView({super.key, required this.engine});
 
+  void _showDisplayModeDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        final currentMode = engine.displayMode;
+        return AlertDialog(
+          backgroundColor: AppTheme.surfaceWhite,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          title: const Text(
+            '选择显示方式',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: AppTheme.deepNavy,
+            ),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildDisplayOptionTile(
+                context: ctx,
+                title: '习惯连续性分数',
+                subtitle: '显示 0 ~ 100 动态健康度得分',
+                isSelected: currentMode == 0,
+                onTap: () {
+                  engine.setDisplayMode(0);
+                  Navigator.pop(ctx);
+                },
+              ),
+              const SizedBox(height: 8),
+              _buildDisplayOptionTile(
+                context: ctx,
+                title: '直接显示加减次数',
+                subtitle: '分别显示累计增加 (+X) 与减少 (-Y) 次数',
+                isSelected: currentMode == 1,
+                onTap: () {
+                  engine.setDisplayMode(1);
+                  Navigator.pop(ctx);
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildDisplayOptionTile({
+    required BuildContext context,
+    required String title,
+    required String subtitle,
+    required bool isSelected,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+        decoration: BoxDecoration(
+          color: isSelected ? AppTheme.subtleFill : AppTheme.bgCanvas,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: isSelected ? AppTheme.primaryBlue : AppTheme.borderLight,
+            width: isSelected ? 1.4 : 1.0,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              isSelected
+                  ? Icons.radio_button_checked_rounded
+                  : Icons.radio_button_off_rounded,
+              size: 18,
+              color: isSelected ? AppTheme.primaryBlue : Colors.black38,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.bold,
+                      color: isSelected ? AppTheme.primaryBlue : AppTheme.deepNavy,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(fontSize: 11, color: Colors.black54),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _showDayOffsetDialog(BuildContext context) {
     int tempOffset = engine.dayStartHourOffset;
 
@@ -112,7 +215,7 @@ class SettingsView extends StatelessWidget {
           style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.deepNavy),
         ),
         content: const Text(
-          '将清空所有历史打卡记录、备注与属性累计数值，各节点得分将重新开始计算（应用版本号与国策版本号将完整保留）。',
+          '将清空所有历史打卡记录、备注与属性累计数值，各节点得分与计数将重新开始计算（应用版本号与国策版本号将完整保留）。',
           style: TextStyle(fontSize: 13, color: Colors.black87, height: 1.4),
         ),
         actions: [
@@ -153,6 +256,13 @@ class SettingsView extends StatelessWidget {
         ? '不延后 (00:00 开启新一天)'
         : '延后 $offset 小时 (凌晨 0$offset:00 前算作前一天)';
     final cfg = engine.scoreConfig;
+    final displayModeLabel = engine.displayMode == 0 ? '习惯连续性分数' : '直接显示加减次数';
+
+    final webdavSubtitle = !engine.isWebDavConfigured
+        ? '未配置服务器 · 支持同步全部数据与设置参数'
+        : (engine.webdavLastSyncTime != null
+            ? '已配置 · 上次同步 ${engine.webdavLastSyncTime}'
+            : '已配置 · 尚未执行同步');
 
     return ListView(
       padding: const EdgeInsets.only(top: 0, bottom: 24),
@@ -166,7 +276,44 @@ class SettingsView extends StatelessWidget {
           ),
           child: Column(
             children: [
-              // 1. 延后新一天
+              // 1. WebDAV 云同步
+              ListTile(
+                title: const Text(
+                  'WebDAV 云同步',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppTheme.deepNavy),
+                ),
+                subtitle: Text(
+                  webdavSubtitle,
+                  style: const TextStyle(fontSize: 12, color: Colors.black45),
+                ),
+                trailing: const Icon(Icons.chevron_right_rounded, color: Colors.black26),
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (ctx) => WebDavSyncScreen(engine: engine),
+                    ),
+                  );
+                },
+              ),
+              const Divider(height: 1, thickness: 0.8, color: AppTheme.borderLight),
+
+              // 2. 显示方式（分数 / 加减次数）
+              ListTile(
+                title: const Text(
+                  '显示方式',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppTheme.deepNavy),
+                ),
+                subtitle: Text(
+                  displayModeLabel,
+                  style: const TextStyle(fontSize: 12, color: Colors.black45),
+                ),
+                trailing: const Icon(Icons.chevron_right_rounded, color: Colors.black26),
+                onTap: () => _showDisplayModeDialog(context),
+              ),
+              const Divider(height: 1, thickness: 0.8, color: AppTheme.borderLight),
+
+              // 3. 延后新一天
               ListTile(
                 title: const Text(
                   '延后新一天',
@@ -181,7 +328,7 @@ class SettingsView extends StatelessWidget {
               ),
               const Divider(height: 1, thickness: 0.8, color: AppTheme.borderLight),
 
-              // 2. 前一天未完成自动标记为减开关
+              // 4. 前一天未完成自动标记为减开关
               SwitchListTile(
                 title: const Text(
                   '未完成自动标记为减',
@@ -197,7 +344,7 @@ class SettingsView extends StatelessWidget {
               ),
               const Divider(height: 1, thickness: 0.8, color: AppTheme.borderLight),
 
-              // 3. 习惯连续性打分算法参数配置
+              // 5. 习惯连续性打分算法参数配置
               ListTile(
                 title: const Text(
                   '计分算法参数设置',
@@ -219,7 +366,7 @@ class SettingsView extends StatelessWidget {
               ),
               const Divider(height: 1, thickness: 0.8, color: AppTheme.borderLight),
 
-              // 4. 版本历史
+              // 6. 版本历史
               ListTile(
                 title: const Text(
                   '版本历史',
@@ -263,7 +410,7 @@ class SettingsView extends StatelessWidget {
               ),
               const Divider(height: 1, thickness: 0.8, color: AppTheme.borderLight),
 
-              // 5. 最底部：删除数据
+              // 7. 最底部：删除数据
               ListTile(
                 title: const Text(
                   '删除数据',
@@ -280,6 +427,502 @@ class SettingsView extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// WebDAV 云同步配置与双向同步页面
+class WebDavSyncScreen extends StatefulWidget {
+  final RsipEngine engine;
+
+  const WebDavSyncScreen({super.key, required this.engine});
+
+  @override
+  State<WebDavSyncScreen> createState() => _WebDavSyncScreenState();
+}
+
+class _WebDavSyncScreenState extends State<WebDavSyncScreen> {
+  late final TextEditingController _urlController;
+  late final TextEditingController _userController;
+  late final TextEditingController _passController;
+
+  bool _obscurePassword = true;
+  bool _isTesting = false;
+  bool _isSyncing = false;
+  ({bool success, String message})? _testResult;
+
+  @override
+  void initState() {
+    super.initState();
+    _urlController = TextEditingController(text: widget.engine.webdavUrl);
+    _userController = TextEditingController(text: widget.engine.webdavUsername);
+    _passController = TextEditingController(text: widget.engine.webdavPassword);
+  }
+
+  @override
+  void dispose() {
+    _urlController.dispose();
+    _userController.dispose();
+    _passController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _handleTestConnection() async {
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _isTesting = true;
+      _testResult = null;
+    });
+
+    final result = await widget.engine.testWebDavConnection(
+      url: _urlController.text,
+      username: _userController.text,
+      password: _passController.text,
+    );
+
+    if (!mounted) return;
+    setState(() {
+      _isTesting = false;
+      _testResult = result;
+    });
+  }
+
+  Future<void> _handleSaveConfig() async {
+    FocusScope.of(context).unfocus();
+    await widget.engine.saveWebDavConfig(
+      url: _urlController.text,
+      username: _userController.text,
+      password: _passController.text,
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('WebDAV 服务器配置已保存'),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  Future<void> _handleUpload() async {
+    FocusScope.of(context).unfocus();
+    await widget.engine.saveWebDavConfig(
+      url: _urlController.text,
+      username: _userController.text,
+      password: _passController.text,
+    );
+
+    setState(() => _isSyncing = true);
+    final res = await widget.engine.uploadToWebDav();
+    if (!mounted) return;
+    setState(() => _isSyncing = false);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(res.message),
+        backgroundColor: res.success ? Colors.green.shade700 : Colors.redAccent,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  Future<void> _handleDownload() async {
+    FocusScope.of(context).unfocus();
+    await widget.engine.saveWebDavConfig(
+      url: _urlController.text,
+      username: _userController.text,
+      password: _passController.text,
+    );
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.surfaceWhite,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: const Text(
+          '确认从云端拉取覆盖？',
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+            color: AppTheme.deepNavy,
+          ),
+        ),
+        content: const Text(
+          '拉取后将使用云端备份完整替换本地的国策节点、画布连线、历史记录以及全部设置参数。',
+          style: TextStyle(fontSize: 13, color: Colors.black87, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消', style: TextStyle(color: Colors.black45)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.primaryBlue,
+              foregroundColor: Colors.white,
+              elevation: 0,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('确认覆盖恢复'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _isSyncing = true);
+    final res = await widget.engine.downloadFromWebDav();
+    if (!mounted) return;
+    setState(() => _isSyncing = false);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(res.message),
+        backgroundColor: res.success ? Colors.green.shade700 : Colors.redAccent,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: widget.engine,
+      builder: (context, _) {
+        final lastSync = widget.engine.webdavLastSyncTime;
+        final busy = _isTesting || _isSyncing;
+
+        return Scaffold(
+          backgroundColor: AppTheme.bgCanvas,
+          appBar: AppBar(
+            backgroundColor: AppTheme.surfaceWhite,
+            elevation: 0,
+            scrolledUnderElevation: 0,
+            title: const Text(
+              'WebDAV 云同步',
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w800,
+                color: AppTheme.deepNavy,
+              ),
+            ),
+          ),
+          body: ListView(
+            padding: const EdgeInsets.only(top: 0, bottom: 32),
+            children: [
+              // 1. 服务器凭据配置区
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: const BoxDecoration(
+                  color: AppTheme.surfaceWhite,
+                  border: Border(
+                    bottom: BorderSide(color: AppTheme.borderLight),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '服务器配置',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                        color: AppTheme.deepNavy,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _urlController,
+                      keyboardType: TextInputType.url,
+                      decoration: InputDecoration(
+                        labelText: 'WebDAV 服务器目录地址',
+                        hintText: 'https://dav.jianguoyun.com/dav/RSIP/',
+                        labelStyle: const TextStyle(fontSize: 13),
+                        hintStyle: const TextStyle(fontSize: 12, color: Colors.black26),
+                        filled: true,
+                        fillColor: AppTheme.bgCanvas,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: BorderSide.none,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: _userController,
+                      decoration: InputDecoration(
+                        labelText: '账号 / 用户名',
+                        hintText: '输入 WebDAV 登录账号',
+                        labelStyle: const TextStyle(fontSize: 13),
+                        hintStyle: const TextStyle(fontSize: 12, color: Colors.black26),
+                        filled: true,
+                        fillColor: AppTheme.bgCanvas,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: BorderSide.none,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: _passController,
+                      obscureText: _obscurePassword,
+                      decoration: InputDecoration(
+                        labelText: '密码 / 应用专用密码',
+                        hintText: '输入应用密码',
+                        labelStyle: const TextStyle(fontSize: 13),
+                        hintStyle: const TextStyle(fontSize: 12, color: Colors.black26),
+                        filled: true,
+                        fillColor: AppTheme.bgCanvas,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: BorderSide.none,
+                        ),
+                        suffixIcon: IconButton(
+                          icon: Icon(
+                            _obscurePassword
+                                ? Icons.visibility_off_outlined
+                                : Icons.visibility_outlined,
+                            size: 18,
+                            color: Colors.black45,
+                          ),
+                          onPressed: () =>
+                              setState(() => _obscurePassword = !_obscurePassword),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+
+                    // 测试连通性与保存配置双按钮
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: AppTheme.primaryBlue,
+                              side: const BorderSide(color: AppTheme.primaryBlue),
+                              padding: const EdgeInsets.symmetric(vertical: 11),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                            ),
+                            onPressed: busy ? null : _handleTestConnection,
+                            icon: _isTesting
+                                ? const SizedBox(
+                                    width: 14,
+                                    height: 14,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: AppTheme.primaryBlue,
+                                    ),
+                                  )
+                                : const Icon(Icons.wifi_tethering_rounded, size: 17),
+                            label: Text(
+                              _isTesting ? '测试中...' : '测试连通性',
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppTheme.primaryBlue,
+                              foregroundColor: Colors.white,
+                              elevation: 0,
+                              padding: const EdgeInsets.symmetric(vertical: 11),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                            ),
+                            onPressed: busy ? null : _handleSaveConfig,
+                            icon: const Icon(Icons.save_outlined, size: 17),
+                            label: const Text(
+                              '保存配置',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+
+                    // 连通性测试结果内联反馈条
+                    if (_testResult != null) ...[
+                      const SizedBox(height: 12),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 9,
+                        ),
+                        decoration: BoxDecoration(
+                          color: _testResult!.success
+                              ? const Color(0xFFF2FBF4)
+                              : const Color(0xFFFDF3F3),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: _testResult!.success
+                                ? Colors.green.shade300
+                                : Colors.red.shade300,
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              _testResult!.success
+                                  ? Icons.check_circle_rounded
+                                  : Icons.error_outline_rounded,
+                              size: 16,
+                              color: _testResult!.success
+                                  ? Colors.green.shade700
+                                  : Colors.red.shade700,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                _testResult!.message,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: _testResult!.success
+                                      ? Colors.green.shade800
+                                      : Colors.red.shade800,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 14),
+
+              // 2. 全量数据与设置参数同步操作区
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: const BoxDecoration(
+                  color: AppTheme.surfaceWhite,
+                  border: Border(
+                    top: BorderSide(color: AppTheme.borderLight, width: 0.8),
+                    bottom: BorderSide(color: AppTheme.borderLight),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          '全量同步操作',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w800,
+                            color: AppTheme.deepNavy,
+                          ),
+                        ),
+                        if (lastSync != null)
+                          Text(
+                            '上次同步: $lastSync',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: Colors.black45,
+                            ),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: AppTheme.bgCanvas,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Text(
+                        '同步范围：全部国策节点、树画布布局与连线、大节点分组、全部历史记录，以及显示方式、延后时间、自动扣减开关与计分算法参数（云端文件：rsip_backup.json）。',
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: Colors.black54,
+                          height: 1.4,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppTheme.deepNavy,
+                              foregroundColor: Colors.white,
+                              elevation: 0,
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                            ),
+                            onPressed: busy ? null : _handleUpload,
+                            icon: _isSyncing
+                                ? const SizedBox(
+                                    width: 14,
+                                    height: 14,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                : const Icon(Icons.cloud_upload_outlined, size: 18),
+                            label: const Text(
+                              '上传至云端',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: AppTheme.deepNavy,
+                              side: const BorderSide(color: AppTheme.borderLight, width: 1.4),
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                            ),
+                            onPressed: busy ? null : _handleDownload,
+                            icon: const Icon(Icons.cloud_download_outlined, size: 18),
+                            label: const Text(
+                              '从云端拉取',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

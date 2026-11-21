@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../core/app_theme.dart';
-import '../../core/progress_color_helper.dart';
+import '../../core/diff_helper.dart';
 import '../../engine/rsip_engine.dart';
 import '../../models/focus_node_model.dart';
 import 'edit_record_dialog.dart';
@@ -16,7 +16,6 @@ class HistoryView extends StatefulWidget {
 }
 
 class _HistoryViewState extends State<HistoryView> {
-  // 单例互斥滑动控制器：全屏仅允许一个条目处于展开状态
   final ValueNotifier<String?> _openedRowNotifier = ValueNotifier(null);
 
   @override
@@ -32,8 +31,7 @@ class _HistoryViewState extends State<HistoryView> {
   String _getUnit(String nodeId, String attrName) {
     try {
       final node = widget.engine.nodes.firstWhere((n) => n.id == nodeId);
-      final attr = node.numericAttributes.firstWhere((a) => a.name == attrName);
-      return attr.unit;
+      return node.numericAttributes.firstWhere((a) => a.name == attrName).unit;
     } catch (_) {
       return '';
     }
@@ -53,10 +51,10 @@ class _HistoryViewState extends State<HistoryView> {
         backgroundColor: AppTheme.surfaceWhite,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         title: const Text(
-          '确认删除此打卡记录？',
+          '确认删除此记录？',
           style: TextStyle(color: AppTheme.deepNavy, fontWeight: FontWeight.bold),
         ),
-        content: const Text('删除后将撤回该次进度的变更以及录入的数值统计。'),
+        content: const Text('删除后将撤回该次记录，并同步更新节点统计与得分。'),
         actions: [
           TextButton(
             child: const Text('取消', style: TextStyle(color: Colors.black45)),
@@ -81,97 +79,98 @@ class _HistoryViewState extends State<HistoryView> {
 
   @override
   Widget build(BuildContext context) {
-    // 过滤掉版本修订记录，仅展示日常打卡记录
-    final list = widget.engine.history.where((r) => !r.isEdit).toList();
+    final allHistory = List<ProgressRecord>.from(widget.engine.history)
+      ..sort((a, b) => b.time.compareTo(a.time));
 
-    if (list.isEmpty) {
+    if (allHistory.isEmpty) {
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.history_toggle_off_rounded, size: 54, color: AppTheme.primaryBlue.withValues(alpha: 0.3)),
+            Icon(
+              Icons.history_rounded,
+              size: 56,
+              color: AppTheme.primaryBlue.withValues(alpha: 0.3),
+            ),
             const SizedBox(height: 12),
             const Text(
-              '暂无打卡记录',
-              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: AppTheme.deepNavy),
+              '暂无历史记录',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+                color: AppTheme.deepNavy,
+              ),
             ),
-            const SizedBox(height: 4),
-            const Text('在列表或树中打卡即可沉淀记录，支持左滑编辑与删除', style: TextStyle(fontSize: 12, color: Colors.black38)),
           ],
         ),
       );
     }
 
-    // 严格按时间降序（最新在上）
-    list.sort((a, b) => b.time.compareTo(a.time));
-
-    // 根据跨天延后规则按归属日期分组
+    // 按归属日期分组
     final Map<String, List<ProgressRecord>> grouped = {};
-    for (final r in list) {
+    for (final r in allHistory) {
       final dateKey = widget.engine.formatRecordDate(r.time);
       grouped.putIfAbsent(dateKey, () => []).add(r);
     }
 
-    return ListView(
-      // 与上部 AppBar 零间距贴合
+    final dateKeys = grouped.keys.toList();
+
+    return ListView.builder(
       padding: const EdgeInsets.only(top: 0, bottom: 24),
-      children: [
-        for (final entry in grouped.entries) ...[
-          // 日期分栏标签栏
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            color: AppTheme.bgCanvas,
-            child: Row(
-              children: [
-                const Icon(Icons.calendar_today_rounded, size: 13, color: AppTheme.primaryBlue),
-                const SizedBox(width: 6),
-                Text(
-                  entry.key,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w800,
-                    color: AppTheme.deepNavy,
-                    letterSpacing: 0.5,
-                  ),
+      itemCount: dateKeys.length,
+      itemBuilder: (context, groupIdx) {
+        final dateStr = dateKeys[groupIdx];
+        final dayRecords = grouped[dateStr]!;
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: const BoxDecoration(
+                color: AppTheme.bgCanvas,
+                border: Border(
+                  bottom: BorderSide(color: AppTheme.borderLight, width: 0.8),
                 ),
-              ],
-            ),
-          ),
-          // 当日无缝记录容器
-          Container(
-            decoration: const BoxDecoration(
-              border: Border(
-                bottom: BorderSide(color: AppTheme.borderLight),
+              ),
+              child: Text(
+                dateStr,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  color: Colors.black54,
+                  letterSpacing: 0.5,
+                ),
               ),
             ),
-            child: Column(
-              children: [
-                for (int i = 0; i < entry.value.length; i++) ...[
-                  if (i > 0) const Divider(height: 1, thickness: 0.8, color: AppTheme.borderLight),
-                  SwipeableRecordRow(
-                    recordId: entry.value[i].id,
-                    enabled: true,
-                    openedRowNotifier: _openedRowNotifier,
-                    onEdit: () => _openEditRecord(context, entry.value[i]),
-                    onDelete: () => _confirmDeleteRecord(context, entry.value[i]),
-                    child: _buildSeamlessHistoryRow(entry.value[i]),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ],
-      ],
+            for (int i = 0; i < dayRecords.length; i++) ...[
+              if (i > 0)
+                const Divider(
+                    height: 1, thickness: 0.8, color: AppTheme.borderLight),
+              SwipeableRecordRow(
+                recordId: dayRecords[i].id,
+                enabled: !dayRecords[i].isEdit,
+                openedRowNotifier: _openedRowNotifier,
+                onEdit: () => _openEditRecord(context, dayRecords[i]),
+                onDelete: () => _confirmDeleteRecord(context, dayRecords[i]),
+                child: _buildSeamlessHistoryRow(dayRecords[i]),
+              ),
+            ],
+          ],
+        );
+      },
     );
   }
 
   Widget _buildSeamlessHistoryRow(ProgressRecord record) {
     final isGain = record.delta > 0;
     final isSkip = record.isSkip;
-    final rowBgColor = isSkip
-        ? const Color(0xFFF1F5F9)
-        : (isGain ? const Color(0xFFF2FBF4) : const Color(0xFFFDF3F3));
+    final rowBgColor = record.isEdit
+        ? const Color(0xFFF0F7FF)
+        : isSkip
+            ? const Color(0xFFF1F5F9)
+            : (isGain ? const Color(0xFFF2FBF4) : const Color(0xFFFDF3F3));
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -182,33 +181,86 @@ class _HistoryViewState extends State<HistoryView> {
           Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              Expanded(
-                child: Text(
-                  record.nodeTitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+              if (record.isEdit) ...[
+                Text(
+                  '#${record.revision ?? 2}',
                   style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.bold,
-                    color: AppTheme.deepNavy,
+                    color: AppTheme.primaryBlue,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 14,
                   ),
                 ),
+                const SizedBox(width: 8),
+              ],
+              Expanded(
+                child: record.isEdit &&
+                        record.oldTitle != null &&
+                        record.oldTitle != record.newTitle
+                    ? RichText(
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        text: TextSpan(
+                          children: DiffHelper.buildDiffSpans(
+                            record.oldTitle!,
+                            record.newTitle ?? record.nodeTitle,
+                          ),
+                        ),
+                      )
+                    : Text(
+                        record.nodeTitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                          color: AppTheme.deepNavy,
+                        ),
+                      ),
               ),
+              const SizedBox(width: 8),
               Text(
-                isSkip
-                    ? '已跳过'
-                    : '净值 ${record.resultProgress >= 0 ? "+${record.resultProgress}" : record.resultProgress}',
+                record.isEdit
+                    ? '版本修订'
+                    : isSkip
+                        ? '已跳过'
+                        : (isGain ? '+1' : '-1'),
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w800,
-                  color: isSkip
-                      ? Colors.blueGrey.shade700
-                      : ProgressColorHelper.getColor(record.resultProgress),
+                  color: record.isEdit
+                      ? AppTheme.primaryBlue
+                      : isSkip
+                          ? Colors.blueGrey.shade700
+                          : (isGain
+                              ? Colors.green.shade700
+                              : Colors.red.shade700),
                 ),
               ),
             ],
           ),
-          if (record.note != null && record.note!.isNotEmpty) ...[
+          if (record.isEdit &&
+              (record.oldContent != null || record.newContent != null)) ...[
+            const SizedBox(height: 8),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.7),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: RichText(
+                text: TextSpan(
+                  children: DiffHelper.buildDiffSpans(
+                    record.oldContent ?? '',
+                    record.newContent ?? '',
+                  ),
+                ),
+              ),
+            ),
+          ],
+          if (!record.isEdit &&
+              record.note != null &&
+              record.note!.isNotEmpty) ...[
             const SizedBox(height: 8),
             Container(
               width: double.infinity,
@@ -234,14 +286,17 @@ class _HistoryViewState extends State<HistoryView> {
               runSpacing: 4,
               children: record.tags!.map((tag) {
                 return Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
                   decoration: BoxDecoration(
                     color: Colors.white.withValues(alpha: 0.7),
                     borderRadius: BorderRadius.circular(4),
                     border: Border.all(
                       color: isSkip
                           ? Colors.blueGrey.shade200
-                          : (isGain ? Colors.green.shade200 : Colors.red.shade200),
+                          : (isGain
+                              ? Colors.green.shade200
+                              : Colors.red.shade200),
                       width: 0.8,
                     ),
                   ),
@@ -252,14 +307,17 @@ class _HistoryViewState extends State<HistoryView> {
                       fontWeight: FontWeight.w700,
                       color: isSkip
                           ? Colors.blueGrey.shade800
-                          : (isGain ? Colors.green.shade800 : Colors.red.shade800),
+                          : (isGain
+                              ? Colors.green.shade800
+                              : Colors.red.shade800),
                     ),
                   ),
                 );
               }).toList(),
             ),
           ],
-          if (record.attributeDeltas != null && record.attributeDeltas!.isNotEmpty) ...[
+          if (record.attributeDeltas != null &&
+              record.attributeDeltas!.isNotEmpty) ...[
             const SizedBox(height: 8),
             Wrap(
               spacing: 6,
@@ -267,7 +325,8 @@ class _HistoryViewState extends State<HistoryView> {
               children: record.attributeDeltas!.entries.map((entry) {
                 final unit = _getUnit(record.nodeId, entry.key);
                 return Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                   decoration: BoxDecoration(
                     color: Colors.white.withValues(alpha: 0.7),
                     borderRadius: BorderRadius.circular(4),

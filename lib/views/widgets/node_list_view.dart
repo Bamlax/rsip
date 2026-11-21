@@ -13,15 +13,32 @@ class NodeListView extends StatelessWidget {
     return val % 1 == 0 ? val.toInt().toString() : val.toStringAsFixed(1);
   }
 
+  Future<void> _handlePullRefresh(BuildContext context) async {
+    final res = await engine.syncWithWebDav();
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(res.message),
+        backgroundColor: res.success ? Colors.green.shade700 : Colors.redAccent,
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final allNormalNodes = engine.nodes.where((n) => !n.isPrompt).toList();
 
-    // 1. 归档管理模式（颜色深浅标定归档状态，无左侧打钩栏）
+    // 1. 归档管理模式（颜色深浅标定归档状态）
     if (engine.isArchiveMode) {
       if (allNormalNodes.isEmpty) {
         return const Center(
-          child: Text('暂无可归档的国策节点', style: TextStyle(fontSize: 14, color: Colors.black38)),
+          child: Text(
+            '暂无可归档的国策节点',
+            style: TextStyle(fontSize: 14, color: Colors.black38),
+          ),
         );
       }
 
@@ -30,7 +47,6 @@ class NodeListView extends StatelessWidget {
 
       return Column(
         children: [
-          // 顶部说明与状态图例栏
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -43,7 +59,11 @@ class NodeListView extends StatelessWidget {
               children: [
                 const Text(
                   '点击卡片切换状态',
-                  style: TextStyle(fontSize: 12, color: Colors.black54, fontWeight: FontWeight.w500),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.black54,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
                 Row(
                   children: [
@@ -70,21 +90,26 @@ class NodeListView extends StatelessWidget {
                     ),
                     Text(
                       ' 已归档($archivedCount)',
-                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF475569)),
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF475569),
+                      ),
                     ),
                   ],
                 ),
               ],
             ),
           ),
-
-          // 国策列表（深色表示已归档，浅亮色表示正常显示）
           Expanded(
             child: ListView.separated(
               padding: const EdgeInsets.only(top: 0, bottom: 24),
               itemCount: allNormalNodes.length,
-              separatorBuilder: (_, __) =>
-                  const Divider(height: 1, thickness: 0.8, color: AppTheme.borderLight),
+              separatorBuilder: (_, __) => const Divider(
+                height: 1,
+                thickness: 0.8,
+                color: AppTheme.borderLight,
+              ),
               itemBuilder: (context, index) {
                 final node = allNormalNodes[index];
                 final isArchived = engine.archiveSelectedIds.contains(node.id);
@@ -94,8 +119,10 @@ class NodeListView extends StatelessWidget {
                   onTap: () => engine.toggleArchiveSelection(node.id),
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 180),
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                    // 深色标定已归档，浅亮白底标定正常活跃
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 14,
+                    ),
                     color: isArchived
                         ? const Color(0xFFD8E0E8)
                         : AppTheme.surfaceWhite,
@@ -135,9 +162,11 @@ class NodeListView extends StatelessWidget {
                           ),
                         ),
                         const SizedBox(width: 12),
-                        // 右侧状态与分数胶囊
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 3,
+                          ),
                           decoration: BoxDecoration(
                             color: isArchived
                                 ? const Color(0xFF64748B)
@@ -171,70 +200,110 @@ class NodeListView extends StatelessWidget {
       );
     }
 
-    // 2. 常规列表：排除已归档国策及今日已完成/跳过的国策
+    // 2. 常规列表：支持下拉出现刷新图标执行 WebDAV 同步
     final visibleNodes = allNormalNodes
         .where((n) => !n.isArchived && engine.isNodeActiveToday(n))
         .toList();
 
-    if (visibleNodes.isEmpty) {
-      final hasActiveNodes = allNormalNodes.any((n) => !n.isArchived);
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              hasActiveNodes ? Icons.task_alt_rounded : Icons.notes_rounded,
-              size: 56,
-              color: AppTheme.primaryBlue.withValues(alpha: 0.3),
+    return RefreshIndicator(
+      color: AppTheme.primaryBlue,
+      backgroundColor: AppTheme.surfaceWhite,
+      onRefresh: () => _handlePullRefresh(context),
+      child: visibleNodes.isEmpty
+          ? LayoutBuilder(
+              builder: (context, constraints) {
+                final hasActiveNodes =
+                    allNormalNodes.any((n) => !n.isArchived);
+                return SingleChildScrollView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  child: ConstrainedBox(
+                    constraints:
+                        BoxConstraints(minHeight: constraints.maxHeight),
+                    child: Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            hasActiveNodes
+                                ? Icons.task_alt_rounded
+                                : Icons.notes_rounded,
+                            size: 56,
+                            color: AppTheme.primaryBlue.withValues(alpha: 0.3),
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            hasActiveNodes
+                                ? '今日待办国策已全部处理'
+                                : '暂无国策节点',
+                            style: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                              color: AppTheme.deepNavy,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            hasActiveNodes
+                                ? '下拉刷新同步云端 · 已处理节点可在「树」界面查看'
+                                : '点击右下角按钮添加国策，或下拉同步云端数据',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Colors.black38,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
+            )
+          : ReorderableListView.builder(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.only(top: 0, bottom: 24),
+              itemCount: visibleNodes.length,
+              onReorder: (oldIndex, newIndex) =>
+                  engine.reorderNodes(oldIndex, newIndex),
+              proxyDecorator: (child, index, animation) {
+                return Material(
+                  elevation: 6,
+                  color: AppTheme.surfaceWhite,
+                  shadowColor: AppTheme.primaryBlue.withValues(alpha: 0.35),
+                  child: child,
+                );
+              },
+              itemBuilder: (context, index) {
+                final node = visibleNodes[index];
+                return Container(
+                  key: ValueKey(node.id),
+                  decoration: const BoxDecoration(
+                    color: AppTheme.surfaceWhite,
+                    border: Border(
+                      bottom: BorderSide(
+                        color: AppTheme.borderLight,
+                        width: 0.8,
+                      ),
+                    ),
+                  ),
+                  child: _buildSeamlessNodeRow(node),
+                );
+              },
             ),
-            const SizedBox(height: 12),
-            Text(
-              hasActiveNodes ? '今日待办国策已全部处理' : '暂无国策节点',
-              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: AppTheme.deepNavy),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              hasActiveNodes ? '今日已记录或跳过的节点可在「树」界面查看' : '点击右下角按钮添加国策，长按可上下拖拽排序',
-              style: const TextStyle(fontSize: 12, color: Colors.black38),
-            ),
-          ],
-        ),
-      );
-    }
-
-    return ReorderableListView.builder(
-      padding: const EdgeInsets.only(top: 0, bottom: 24),
-      itemCount: visibleNodes.length,
-      onReorder: (oldIndex, newIndex) => engine.reorderNodes(oldIndex, newIndex),
-      proxyDecorator: (child, index, animation) {
-        return Material(
-          elevation: 6,
-          color: AppTheme.surfaceWhite,
-          shadowColor: AppTheme.primaryBlue.withValues(alpha: 0.35),
-          child: child,
-        );
-      },
-      itemBuilder: (context, index) {
-        final node = visibleNodes[index];
-        return Container(
-          key: ValueKey(node.id),
-          decoration: const BoxDecoration(
-            color: AppTheme.surfaceWhite,
-            border: Border(
-              bottom: BorderSide(color: AppTheme.borderLight, width: 0.8),
-            ),
-          ),
-          child: _buildSeamlessNodeRow(node),
-        );
-      },
     );
   }
 
   Widget _buildSeamlessNodeRow(FocusNodeModel node) {
     final isSelected = node.id == engine.selectedNodeId;
+    final isCountMode = engine.displayMode == 1;
+
     final scoreRes = engine.getNodeScore(node.id);
     final scoreColor = ProgressColorHelper.getScoreColor(scoreRes.score);
     final scoreBgColor = ProgressColorHelper.getScoreBgColor(scoreRes.score);
+
+    final incTextColor =
+        ProgressColorHelper.getIncreaseColor(node.increaseCount);
+    final incBgColor =
+        ProgressColorHelper.getIncreaseBgColor(node.increaseCount);
 
     return InkWell(
       onTap: () => engine.selectNode(node.id),
@@ -260,25 +329,72 @@ class NodeListView extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: scoreBgColor,
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(
-                      color: scoreColor.withValues(alpha: 0.35),
-                      width: 0.8,
+                if (isCountMode)
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 7,
+                          vertical: 2.5,
+                        ),
+                        decoration: BoxDecoration(
+                          color: incBgColor,
+                          borderRadius: BorderRadius.circular(5),
+                        ),
+                        child: Text(
+                          '+${node.increaseCount}',
+                          style: TextStyle(
+                            color: incTextColor,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 7,
+                          vertical: 2.5,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.red.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(5),
+                        ),
+                        child: Text(
+                          '-${node.decreaseCount}',
+                          style: TextStyle(
+                            color: Colors.red.shade700,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                    ],
+                  )
+                else
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: scoreBgColor,
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(
+                        color: scoreColor.withValues(alpha: 0.35),
+                        width: 0.8,
+                      ),
+                    ),
+                    child: Text(
+                      '${scoreRes.score.toStringAsFixed(1)}分',
+                      style: TextStyle(
+                        color: scoreColor,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w900,
+                      ),
                     ),
                   ),
-                  child: Text(
-                    '${scoreRes.score.toStringAsFixed(1)}分',
-                    style: TextStyle(
-                      color: scoreColor,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                ),
               ],
             ),
             if (node.content.isNotEmpty) ...[
@@ -301,7 +417,10 @@ class NodeListView extends StatelessWidget {
                 runSpacing: 4,
                 children: node.numericAttributes.map((attr) {
                   return Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 7,
+                      vertical: 2.5,
+                    ),
                     decoration: BoxDecoration(
                       color: AppTheme.bgCanvas,
                       borderRadius: BorderRadius.circular(4),

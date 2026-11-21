@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'core/app_theme.dart';
 import 'core/version_history.dart';
@@ -6,9 +7,17 @@ import 'views/main_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // 自动从 pubspec.yaml / 原生层读取当前版本号
   await VersionHistoryConfig.init();
   runApp(const RsipApp());
+}
+
+class _AppScrollBehavior extends MaterialScrollBehavior {
+  @override
+  Set<PointerDeviceKind> get dragDevices => {
+        PointerDeviceKind.touch,
+        PointerDeviceKind.mouse,
+        PointerDeviceKind.trackpad,
+      };
 }
 
 class RsipApp extends StatefulWidget {
@@ -36,9 +45,10 @@ class _RsipAppState extends State<RsipApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'RSIP',
+      title: 'RSIP 稳态协议',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
+      scrollBehavior: _AppScrollBehavior(),
       home: MainScreen(engine: _engine),
     );
   }
