@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../../core/app_theme.dart';
 import '../../core/progress_color_helper.dart';
 import '../../engine/rsip_engine.dart';
@@ -27,11 +28,51 @@ class NodeListView extends StatelessWidget {
     );
   }
 
+  void _confirmDeletePreset(BuildContext context, ArchivePresetModel preset) {
+    HapticFeedback.mediumImpact();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.surfaceWhite,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: const Text(
+          '删除归档分类？',
+          style: TextStyle(
+            color: AppTheme.deepNavy,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        content: Text('将删除快速归档分类「${preset.name}」，不会影响现有国策节点。'),
+        actions: [
+          TextButton(
+            child: const Text('取消', style: TextStyle(color: Colors.black45)),
+            onPressed: () => Navigator.pop(ctx),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.redAccent,
+              foregroundColor: Colors.white,
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+            child: const Text('确认删除'),
+            onPressed: () {
+              engine.deleteArchivePreset(preset.id);
+              Navigator.pop(ctx);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final allNormalNodes = engine.nodes.where((n) => !n.isPrompt).toList();
 
-    // 1. 归档管理模式（颜色深浅标定归档状态）
+    // 1. 归档管理模式
     if (engine.isArchiveMode) {
       if (allNormalNodes.isEmpty) {
         return const Center(
@@ -42,155 +83,86 @@ class NodeListView extends StatelessWidget {
         );
       }
 
-      final archivedCount = engine.archiveSelectedIds.length;
-      final activeCount = allNormalNodes.length - archivedCount;
+      final presets = engine.archivePresets;
 
       return Column(
         children: [
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            decoration: const BoxDecoration(
-              color: AppTheme.bgCanvas,
-              border: Border(bottom: BorderSide(color: AppTheme.borderLight)),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text(
-                  '点击卡片切换状态',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.black54,
-                    fontWeight: FontWeight.w500,
-                  ),
+          // 顶部栏下方的快速归档小 Tag 区
+          if (presets.isNotEmpty)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: const BoxDecoration(
+                color: AppTheme.surfaceWhite,
+                border: Border(
+                  bottom: BorderSide(color: AppTheme.borderLight, width: 0.8),
                 ),
-                Row(
-                  children: [
-                    Container(
-                      width: 10,
-                      height: 10,
+              ),
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: presets.map((preset) {
+                  final isSelected =
+                      engine.selectedArchivePresetId == preset.id;
+
+                  return GestureDetector(
+                    onTap: () => engine.selectArchivePreset(preset.id),
+                    onLongPress: () => _confirmDeletePreset(context, preset),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
                       decoration: BoxDecoration(
-                        color: AppTheme.surfaceWhite,
-                        borderRadius: BorderRadius.circular(2),
-                        border: Border.all(color: Colors.black26),
+                        color: isSelected
+                            ? AppTheme.primaryBlue
+                            : AppTheme.bgCanvas,
+                        borderRadius: BorderRadius.circular(5),
+                        border: Border.all(
+                          color: isSelected
+                              ? AppTheme.primaryBlue
+                              : AppTheme.borderLight,
+                          width: 0.8,
+                        ),
+                      ),
+                      child: Text(
+                        preset.name,
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight:
+                              isSelected ? FontWeight.w700 : FontWeight.w600,
+                          color: isSelected ? Colors.white : AppTheme.deepNavy,
+                        ),
                       ),
                     ),
-                    Text(
-                      ' 正常($activeCount)   ',
-                      style: const TextStyle(fontSize: 11, color: Colors.black54),
-                    ),
-                    Container(
-                      width: 10,
-                      height: 10,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFCBD5E1),
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                    Text(
-                      ' 已归档($archivedCount)',
-                      style: const TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF475569),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
+                  );
+                }).toList(),
+              ),
             ),
-          ),
+
+          // 国策列表：与常规模式共用同一行布局，点击切换归档状态零尺寸变化与位移
           Expanded(
-            child: ListView.separated(
+            child: ListView.builder(
               padding: const EdgeInsets.only(top: 0, bottom: 24),
               itemCount: allNormalNodes.length,
-              separatorBuilder: (_, __) => const Divider(
-                height: 1,
-                thickness: 0.8,
-                color: AppTheme.borderLight,
-              ),
               itemBuilder: (context, index) {
                 final node = allNormalNodes[index];
                 final isArchived = engine.archiveSelectedIds.contains(node.id);
-                final scoreRes = engine.getNodeScore(node.id);
 
-                return InkWell(
-                  onTap: () => engine.toggleArchiveSelection(node.id),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 180),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 14,
+                return Container(
+                  key: ValueKey('archive_${node.id}'),
+                  decoration: const BoxDecoration(
+                    border: Border(
+                      bottom: BorderSide(
+                        color: AppTheme.borderLight,
+                        width: 0.8,
+                      ),
                     ),
-                    color: isArchived
-                        ? const Color(0xFFD8E0E8)
-                        : AppTheme.surfaceWhite,
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                node.title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w800,
-                                  color: isArchived
-                                      ? const Color(0xFF475569)
-                                      : AppTheme.deepNavy,
-                                ),
-                              ),
-                              if (node.content.isNotEmpty) ...[
-                                const SizedBox(height: 4),
-                                Text(
-                                  node.content,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: isArchived
-                                        ? const Color(0xFF64748B)
-                                        : Colors.black54,
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 3,
-                          ),
-                          decoration: BoxDecoration(
-                            color: isArchived
-                                ? const Color(0xFF64748B)
-                                : AppTheme.bgCanvas,
-                            borderRadius: BorderRadius.circular(6),
-                            border: isArchived
-                                ? null
-                                : Border.all(color: AppTheme.borderLight),
-                          ),
-                          child: Text(
-                            isArchived
-                                ? '已归档'
-                                : '${scoreRes.score.toStringAsFixed(1)}分',
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w700,
-                              color: isArchived
-                                  ? Colors.white
-                                  : AppTheme.deepNavy,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
+                  ),
+                  child: _buildSeamlessNodeRow(
+                    node,
+                    isArchiveMode: true,
+                    isArchivedInMode: isArchived,
                   ),
                 );
               },
@@ -200,7 +172,7 @@ class NodeListView extends StatelessWidget {
       );
     }
 
-    // 2. 常规列表：支持下拉出现刷新图标执行 WebDAV 同步
+    // 2. 常规列表：支持下拉同步 WebDAV
     final visibleNodes = allNormalNodes
         .where((n) => !n.isArchived && engine.isNodeActiveToday(n))
         .toList();
@@ -292,8 +264,13 @@ class NodeListView extends StatelessWidget {
     );
   }
 
-  Widget _buildSeamlessNodeRow(FocusNodeModel node) {
-    final isSelected = node.id == engine.selectedNodeId;
+  /// 常规模式与归档模式共享的国策行组件：保证点击前后零尺寸变化、零元素位移
+  Widget _buildSeamlessNodeRow(
+    FocusNodeModel node, {
+    bool isArchiveMode = false,
+    bool isArchivedInMode = false,
+  }) {
+    final isSelected = !isArchiveMode && node.id == engine.selectedNodeId;
     final isCountMode = engine.displayMode == 1;
 
     final scoreRes = engine.getNodeScore(node.id);
@@ -305,11 +282,24 @@ class NodeListView extends StatelessWidget {
     final incBgColor =
         ProgressColorHelper.getIncreaseBgColor(node.increaseCount);
 
+    final Color bgColor = isArchiveMode
+        ? (isArchivedInMode ? const Color(0xFFD8E0E8) : AppTheme.surfaceWhite)
+        : (isSelected ? AppTheme.subtleFill : AppTheme.surfaceWhite);
+
+    final Color titleColor =
+        isArchivedInMode ? const Color(0xFF475569) : AppTheme.deepNavy;
+    final Color contentColor =
+        isArchivedInMode ? const Color(0xFF64748B) : Colors.black87;
+    final double mutedOpacity = isArchivedInMode ? 0.55 : 1.0;
+
     return InkWell(
-      onTap: () => engine.selectNode(node.id),
-      child: Container(
+      onTap: isArchiveMode
+          ? () => engine.toggleArchiveSelection(node.id)
+          : () => engine.selectNode(node.id),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        color: isSelected ? AppTheme.subtleFill : AppTheme.surfaceWhite,
+        color: bgColor,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -321,80 +311,82 @@ class NodeListView extends StatelessWidget {
                     node.title,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 15,
                       fontWeight: FontWeight.w800,
-                      color: AppTheme.deepNavy,
+                      color: titleColor,
                     ),
                   ),
                 ),
                 const SizedBox(width: 8),
-                if (isCountMode)
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 7,
-                          vertical: 2.5,
-                        ),
-                        decoration: BoxDecoration(
-                          color: incBgColor,
-                          borderRadius: BorderRadius.circular(5),
-                        ),
-                        child: Text(
-                          '+${node.increaseCount}',
-                          style: TextStyle(
-                            color: incTextColor,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w900,
+                Opacity(
+                  opacity: mutedOpacity,
+                  child: isCountMode
+                      ? Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 7,
+                                vertical: 2.5,
+                              ),
+                              decoration: BoxDecoration(
+                                color: incBgColor,
+                                borderRadius: BorderRadius.circular(5),
+                              ),
+                              child: Text(
+                                '+${node.increaseCount}',
+                                style: TextStyle(
+                                  color: incTextColor,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 7,
+                                vertical: 2.5,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.red.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(5),
+                              ),
+                              child: Text(
+                                '-${node.decreaseCount}',
+                                style: TextStyle(
+                                  color: Colors.red.shade700,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ),
+                          ],
+                        )
+                      : Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 3,
+                          ),
+                          decoration: BoxDecoration(
+                            color: scoreBgColor,
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(
+                              color: scoreColor.withValues(alpha: 0.35),
+                              width: 0.8,
+                            ),
+                          ),
+                          child: Text(
+                            '${scoreRes.score.toStringAsFixed(1)}分',
+                            style: TextStyle(
+                              color: scoreColor,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w900,
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 4),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 7,
-                          vertical: 2.5,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.red.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(5),
-                        ),
-                        child: Text(
-                          '-${node.decreaseCount}',
-                          style: TextStyle(
-                            color: Colors.red.shade700,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                      ),
-                    ],
-                  )
-                else
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 3,
-                    ),
-                    decoration: BoxDecoration(
-                      color: scoreBgColor,
-                      borderRadius: BorderRadius.circular(6),
-                      border: Border.all(
-                        color: scoreColor.withValues(alpha: 0.35),
-                        width: 0.8,
-                      ),
-                    ),
-                    child: Text(
-                      '${scoreRes.score.toStringAsFixed(1)}分',
-                      style: TextStyle(
-                        color: scoreColor,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                  ),
+                ),
               ],
             ),
             if (node.content.isNotEmpty) ...[
@@ -403,39 +395,48 @@ class NodeListView extends StatelessWidget {
                 node.content,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 13,
-                  color: Colors.black87,
+                  color: contentColor,
                   height: 1.4,
                 ),
               ),
             ],
             if (node.numericAttributes.isNotEmpty) ...[
               const SizedBox(height: 8),
-              Wrap(
-                spacing: 6,
-                runSpacing: 4,
-                children: node.numericAttributes.map((attr) {
-                  return Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 7,
-                      vertical: 2.5,
-                    ),
-                    decoration: BoxDecoration(
-                      color: AppTheme.bgCanvas,
-                      borderRadius: BorderRadius.circular(4),
-                      border: Border.all(color: AppTheme.borderLight),
-                    ),
-                    child: Text(
-                      '${attr.name}: 累计 ${_formatNum(attr.totalValue)}${attr.unit} (均 ${_formatNum(attr.average)})',
-                      style: const TextStyle(
-                        fontSize: 11,
-                        color: AppTheme.deepNavy,
-                        fontWeight: FontWeight.w600,
+              Opacity(
+                opacity: isArchivedInMode ? 0.65 : 1.0,
+                child: Wrap(
+                  spacing: 6,
+                  runSpacing: 4,
+                  children: node.numericAttributes.map((attr) {
+                    return Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 7,
+                        vertical: 2.5,
                       ),
-                    ),
-                  );
-                }).toList(),
+                      decoration: BoxDecoration(
+                        color: isArchivedInMode
+                            ? Colors.white.withValues(alpha: 0.45)
+                            : AppTheme.bgCanvas,
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(
+                          color: isArchivedInMode
+                              ? const Color(0xFFB8C4D0)
+                              : AppTheme.borderLight,
+                        ),
+                      ),
+                      child: Text(
+                        '${attr.name}: 累计 ${_formatNum(attr.totalValue)}${attr.unit} (均 ${_formatNum(attr.average)})',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: titleColor,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
               ),
             ],
           ],

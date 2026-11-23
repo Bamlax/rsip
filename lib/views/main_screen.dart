@@ -122,7 +122,6 @@ class _MainScreenState extends State<MainScreen> {
               )
             : null;
 
-        // Windows / 桌面端：左侧导航栏 + 右侧主内容区
         if (useSideNav) {
           return Scaffold(
             backgroundColor: AppTheme.bgCanvas,
@@ -142,7 +141,6 @@ class _MainScreenState extends State<MainScreen> {
           );
         }
 
-        // 移动端：保持底部导航栏
         return Scaffold(
           backgroundColor: AppTheme.bgCanvas,
           appBar: appBar,
@@ -177,7 +175,6 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
-  /// Windows / 桌面端左侧导航栏
   Widget _buildDesktopSidebar() {
     return Container(
       width: 76,
@@ -189,7 +186,6 @@ class _MainScreenState extends State<MainScreen> {
       ),
       child: Column(
         children: [
-          // 顶部品牌区，与右侧 AppBar 等高对齐
           Container(
             height: kToolbarHeight,
             alignment: Alignment.center,
@@ -278,6 +274,8 @@ class _MainScreenState extends State<MainScreen> {
     required bool inArchiveMode,
     required bool useSideNav,
   }) {
+    final activePreset = widget.engine.selectedArchivePreset;
+
     return AppBar(
       backgroundColor: AppTheme.surfaceWhite,
       elevation: 0,
@@ -329,7 +327,10 @@ class _MainScreenState extends State<MainScreen> {
             )
           : inArchiveMode
           ? Text(
-              '归档管理 (${widget.engine.archiveSelectedIds.length})',
+              activePreset != null
+                  ? '${activePreset.name} (${widget.engine.archiveSelectedIds.length})'
+                  : '归档管理 (${widget.engine.archiveSelectedIds.length})',
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(
                 color: AppTheme.deepNavy,
                 fontSize: 16,
@@ -477,9 +478,29 @@ class _MainScreenState extends State<MainScreen> {
     bool inGroupMode,
     bool inArchiveMode,
   ) {
-    // 1. 归档模式
+    // 1. 归档模式：支持 + 保存为分类、选中分类时重命名、以及右侧完成
     if (inArchiveMode) {
+      final activePreset = widget.engine.selectedArchivePreset;
       return [
+        if (activePreset != null)
+          IconButton(
+            icon: const Icon(
+              Icons.edit_outlined,
+              size: 20,
+              color: AppTheme.deepNavy,
+            ),
+            tooltip: '重命名当前分类',
+            onPressed: () => _openRenameArchivePresetDialog(activePreset),
+          ),
+        IconButton(
+          icon: const Icon(
+            Icons.add_rounded,
+            size: 24,
+            color: AppTheme.primaryBlue,
+          ),
+          tooltip: '保存当前归档为分类',
+          onPressed: _openSaveArchivePresetDialog,
+        ),
         TextButton(
           onPressed: () {
             widget.engine.saveArchiveSelections();
@@ -662,6 +683,135 @@ class _MainScreenState extends State<MainScreen> {
     }
 
     return const [];
+  }
+
+  /// 弹窗：保存当前归档配置为新的命名分类
+  void _openSaveArchivePresetDialog() {
+    final nameController = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.surfaceWhite,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: const Text(
+          '保存归档分类',
+          style: TextStyle(
+            fontSize: 17,
+            fontWeight: FontWeight.w800,
+            color: AppTheme.deepNavy,
+          ),
+        ),
+        content: TextField(
+          controller: nameController,
+          autofocus: true,
+          decoration: InputDecoration(
+            labelText: '分类名称',
+            hintText: '如：工作日 / 假期精简 / 考试周',
+            labelStyle: const TextStyle(fontSize: 13),
+            filled: true,
+            fillColor: AppTheme.bgCanvas,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide.none,
+            ),
+          ),
+          onSubmitted: (val) {
+            final name = val.trim();
+            if (name.isEmpty) return;
+            widget.engine.addArchivePreset(name);
+            Navigator.pop(ctx);
+          },
+        ),
+        actions: [
+          TextButton(
+            child: const Text('取消', style: TextStyle(color: Colors.black45)),
+            onPressed: () => Navigator.pop(ctx),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.primaryBlue,
+              foregroundColor: Colors.white,
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+            child: const Text('保存'),
+            onPressed: () {
+              final name = nameController.text.trim();
+              if (name.isEmpty) return;
+              widget.engine.addArchivePreset(name);
+              Navigator.pop(ctx);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 弹窗：修改当前选中分类的名称
+  void _openRenameArchivePresetDialog(ArchivePresetModel preset) {
+    final nameController = TextEditingController(text: preset.name);
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.surfaceWhite,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: const Text(
+          '修改分类名称',
+          style: TextStyle(
+            fontSize: 17,
+            fontWeight: FontWeight.w800,
+            color: AppTheme.deepNavy,
+          ),
+        ),
+        content: TextField(
+          controller: nameController,
+          autofocus: true,
+          decoration: InputDecoration(
+            labelText: '分类名称',
+            labelStyle: const TextStyle(fontSize: 13),
+            filled: true,
+            fillColor: AppTheme.bgCanvas,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide.none,
+            ),
+          ),
+          onSubmitted: (val) {
+            final name = val.trim();
+            if (name.isEmpty) return;
+            widget.engine.renameArchivePreset(preset.id, name);
+            Navigator.pop(ctx);
+          },
+        ),
+        actions: [
+          TextButton(
+            child: const Text('取消', style: TextStyle(color: Colors.black45)),
+            onPressed: () => Navigator.pop(ctx),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.primaryBlue,
+              foregroundColor: Colors.white,
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+            child: const Text('保存'),
+            onPressed: () {
+              final name = nameController.text.trim();
+              if (name.isEmpty) return;
+              widget.engine.renameArchivePreset(preset.id, name);
+              Navigator.pop(ctx);
+            },
+          ),
+        ],
+      ),
+    );
   }
 
   void _confirmDeleteConnection(FocusConnection conn) {

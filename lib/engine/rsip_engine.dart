@@ -11,6 +11,7 @@ class RsipEngine extends ChangeNotifier {
   final Set<FocusConnection> _connections = {};
   final List<FocusGroupModel> _groups = [];
   final List<ProgressRecord> _history = [];
+  final List<ArchivePresetModel> _archivePresets = [];
 
   String? _selectedNodeId;
   FocusConnection? _selectedConnection;
@@ -21,6 +22,7 @@ class RsipEngine extends ChangeNotifier {
   // 归档选择模式状态
   bool _isArchiveMode = false;
   final Set<String> _archiveSelectedIds = {};
+  String? _selectedArchivePresetId;
 
   int _dayStartHourOffset = 0;
   bool _autoPenalizeMissedYesterday = false;
@@ -52,6 +54,8 @@ class RsipEngine extends ChangeNotifier {
   Set<FocusConnection> get connections => Set.unmodifiable(_connections);
   List<FocusGroupModel> get groups => List.unmodifiable(_groups);
   List<ProgressRecord> get history => List.unmodifiable(_history.reversed);
+  List<ArchivePresetModel> get archivePresets =>
+      List.unmodifiable(_archivePresets);
 
   String? get selectedNodeId => _selectedNodeId;
   FocusNodeModel? get selectedNode {
@@ -65,10 +69,21 @@ class RsipEngine extends ChangeNotifier {
 
   FocusConnection? get selectedConnection => _selectedConnection;
   bool get isGroupSelectMode => _isGroupSelectMode;
-  Set<String> get groupSelectedNodeIds => Set.unmodifiable(_groupSelectedNodeIds);
+  Set<String> get groupSelectedNodeIds =>
+      Set.unmodifiable(_groupSelectedNodeIds);
 
   bool get isArchiveMode => _isArchiveMode;
   Set<String> get archiveSelectedIds => Set.unmodifiable(_archiveSelectedIds);
+  String? get selectedArchivePresetId => _selectedArchivePresetId;
+  ArchivePresetModel? get selectedArchivePreset {
+    if (_selectedArchivePresetId == null) return null;
+    try {
+      return _archivePresets
+          .firstWhere((p) => p.id == _selectedArchivePresetId);
+    } catch (_) {
+      return null;
+    }
+  }
 
   RsipEngine() {
     _loadFromStorage();
@@ -82,6 +97,7 @@ class RsipEngine extends ChangeNotifier {
   static const String _keyConnections = 'rsip_connections_data';
   static const String _keyGroups = 'rsip_groups_data';
   static const String _keyHistory = 'rsip_history_data';
+  static const String _keyArchivePresets = 'rsip_archive_presets_data';
   static const String _keyDayOffset = 'rsip_day_start_hour_offset';
   static const String _keyAutoPenalize = 'rsip_auto_penalize_missed_yesterday';
   static const String _keyLastPenaltyDate = 'rsip_last_auto_penalty_date';
@@ -146,6 +162,13 @@ class RsipEngine extends ChangeNotifier {
         _history.addAll(list.map((e) => ProgressRecord.fromJson(e)));
       }
 
+      final presetsJson = prefs.getString(_keyArchivePresets);
+      if (presetsJson != null) {
+        final List list = jsonDecode(presetsJson);
+        _archivePresets.clear();
+        _archivePresets.addAll(list.map((e) => ArchivePresetModel.fromJson(e)));
+      }
+
       await _applyMissedYesterdayPenaltyIfNeeded(saveAfter: true);
 
       notifyListeners();
@@ -176,6 +199,10 @@ class RsipEngine extends ChangeNotifier {
       await prefs.setString(
         _keyHistory,
         jsonEncode(_history.map((h) => h.toJson()).toList()),
+      );
+      await prefs.setString(
+        _keyArchivePresets,
+        jsonEncode(_archivePresets.map((p) => p.toJson()).toList()),
       );
       await prefs.setInt(_keyDayOffset, _dayStartHourOffset);
       await prefs.setBool(_keyAutoPenalize, _autoPenalizeMissedYesterday);
@@ -369,6 +396,7 @@ class RsipEngine extends ChangeNotifier {
         'connections': _connections.map((c) => c.toJson()).toList(),
         'groups': _groups.map((g) => g.toJson()).toList(),
         'history': _history.map((h) => h.toJson()).toList(),
+        'archivePresets': _archivePresets.map((p) => p.toJson()).toList(),
       },
     };
     return const JsonEncoder.withIndent('  ').convert(payload);
@@ -505,7 +533,6 @@ class RsipEngine extends ChangeNotifier {
     }
   }
 
-  /// 首页下拉刷新专用：智能比对云端与本地时间戳，自动决定拉取、上传或提示已是最新
   Future<({bool success, String message})> syncWithWebDav() async {
     final uris = _resolveWebDavUris(_webdavUrl);
     if (uris == null) {
@@ -527,7 +554,6 @@ class RsipEngine extends ChangeNotifier {
 
       final getRes = await getReq.close().timeout(const Duration(seconds: 12));
 
-      // 若云端尚无备份文件，自动将本地数据首次上传
       if (getRes.statusCode == 404) {
         await getRes.drain<void>();
         client.close(force: true);
@@ -555,7 +581,6 @@ class RsipEngine extends ChangeNotifier {
 
       final isLocalEmpty = _nodes.isEmpty && _history.isEmpty;
 
-      // 情况 1：本地为空，或云端时间戳严格晚于本地最后修改时间 -> 从云端拉取
       if (isLocalEmpty ||
           (cloudExportedAt != null &&
               (_localLastModifiedAt == null ||
@@ -571,7 +596,6 @@ class RsipEngine extends ChangeNotifier {
         return (success: true, message: '同步完成：已从云端拉取最新数据');
       }
 
-      // 情况 2：云端与本地时间戳一致（1秒误差内） -> 无需重复上传
       if (cloudExportedAt != null &&
           _localLastModifiedAt != null &&
           _localLastModifiedAt!.difference(cloudExportedAt).inSeconds.abs() <=
@@ -582,7 +606,6 @@ class RsipEngine extends ChangeNotifier {
         return (success: true, message: '同步完成：当前已是最新状态');
       }
 
-      // 情况 3：本地有新的修改 -> 自动上传至云端
       client.close(force: true);
       return await uploadToWebDav();
     } on FormatException {
@@ -626,6 +649,7 @@ class RsipEngine extends ChangeNotifier {
     final connList = (dataMap['connections'] as List<dynamic>?) ?? [];
     final groupsList = (dataMap['groups'] as List<dynamic>?) ?? [];
     final historyList = (dataMap['history'] as List<dynamic>?) ?? [];
+    final presetsList = (dataMap['archivePresets'] as List<dynamic>?) ?? [];
 
     _nodes
       ..clear()
@@ -647,6 +671,12 @@ class RsipEngine extends ChangeNotifier {
       ..addAll(
         historyList.map((e) => ProgressRecord.fromJson(e as Map<String, dynamic>)),
       );
+    _archivePresets
+      ..clear()
+      ..addAll(
+        presetsList
+            .map((e) => ArchivePresetModel.fromJson(e as Map<String, dynamic>)),
+      );
 
     _selectedNodeId = null;
     _selectedConnection = null;
@@ -654,6 +684,7 @@ class RsipEngine extends ChangeNotifier {
     _groupSelectedNodeIds.clear();
     _isArchiveMode = false;
     _archiveSelectedIds.clear();
+    _selectedArchivePresetId = null;
 
     final cloudExportedAt = decoded['exportedAt'] is String
         ? DateTime.tryParse(decoded['exportedAt'] as String)
@@ -912,11 +943,12 @@ class RsipEngine extends ChangeNotifier {
   }
 
   // ==========================================
-  // 归档管理模式
+  // 归档管理模式与快速归档分类
   // ==========================================
 
   void startArchiveMode() {
     _isArchiveMode = true;
+    _selectedArchivePresetId = null;
     _archiveSelectedIds.clear();
     for (final n in _nodes) {
       if (n.isArchived) {
@@ -934,7 +966,83 @@ class RsipEngine extends ChangeNotifier {
     } else {
       _archiveSelectedIds.add(id);
     }
+
+    // 选中某分类名时，点击卡片直接同步增改该分类的归档内容
+    if (_selectedArchivePresetId != null) {
+      final presetIdx =
+          _archivePresets.indexWhere((p) => p.id == _selectedArchivePresetId);
+      if (presetIdx != -1) {
+        _archivePresets[presetIdx].archivedNodeIds
+          ..clear()
+          ..addAll(_archiveSelectedIds);
+        notifyListeners();
+        _saveToStorage();
+        return;
+      }
+    }
+
     notifyListeners();
+  }
+
+  /// 将当前归档状态保存为一个新的命名分类
+  void addArchivePreset(String name) {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return;
+
+    final preset = ArchivePresetModel(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      name: trimmed,
+      archivedNodeIds: Set<String>.from(_archiveSelectedIds),
+    );
+    _archivePresets.add(preset);
+    _selectedArchivePresetId = preset.id;
+    notifyListeners();
+    _saveToStorage();
+  }
+
+  /// 修改指定分类的名称
+  void renameArchivePreset(String presetId, String newName) {
+    final trimmed = newName.trim();
+    if (trimmed.isEmpty) return;
+    final idx = _archivePresets.indexWhere((p) => p.id == presetId);
+    if (idx == -1) return;
+    _archivePresets[idx].name = trimmed;
+    notifyListeners();
+    _saveToStorage();
+  }
+
+  /// 点击分类名：选中并自动应用其归档情况；再次点击已选中分类则取消选中
+  void selectArchivePreset(String presetId) {
+    if (_selectedArchivePresetId == presetId) {
+      _selectedArchivePresetId = null;
+      notifyListeners();
+      return;
+    }
+
+    final idx = _archivePresets.indexWhere((p) => p.id == presetId);
+    if (idx == -1) return;
+
+    _selectedArchivePresetId = presetId;
+    final validNodeIds =
+        _nodes.where((n) => !n.isPrompt).map((n) => n.id).toSet();
+    _archiveSelectedIds
+      ..clear()
+      ..addAll(
+        _archivePresets[idx]
+            .archivedNodeIds
+            .where((id) => validNodeIds.contains(id)),
+      );
+    notifyListeners();
+  }
+
+  /// 长按分类名删除该分类
+  void deleteArchivePreset(String presetId) {
+    _archivePresets.removeWhere((p) => p.id == presetId);
+    if (_selectedArchivePresetId == presetId) {
+      _selectedArchivePresetId = null;
+    }
+    notifyListeners();
+    _saveToStorage();
   }
 
   void saveArchiveSelections() {
@@ -942,6 +1050,7 @@ class RsipEngine extends ChangeNotifier {
       n.isArchived = _archiveSelectedIds.contains(n.id);
     }
     _isArchiveMode = false;
+    _selectedArchivePresetId = null;
     _archiveSelectedIds.clear();
     notifyListeners();
     _saveToStorage();
@@ -949,6 +1058,7 @@ class RsipEngine extends ChangeNotifier {
 
   void cancelArchiveMode() {
     _isArchiveMode = false;
+    _selectedArchivePresetId = null;
     _archiveSelectedIds.clear();
     notifyListeners();
   }
@@ -1204,6 +1314,11 @@ class RsipEngine extends ChangeNotifier {
       group.nodeIds.remove(id);
     }
     _groups.removeWhere((group) => group.nodeIds.isEmpty);
+
+    for (final preset in _archivePresets) {
+      preset.archivedNodeIds.remove(id);
+    }
+    _archiveSelectedIds.remove(id);
 
     notifyListeners();
     _saveToStorage();

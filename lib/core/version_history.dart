@@ -36,6 +36,13 @@ class VersionHistoryConfig {
 
   static const List<VersionRelease> releases = [
       VersionRelease(
+      version: '0.10.0',
+      releaseDate: '2026-11-23',
+      changeLogs: [
+        '新增：归档的分类功能',
+      ],
+    ),
+      VersionRelease(
       version: '0.9.0',
       releaseDate: '2026-11-21',
       changeLogs: [

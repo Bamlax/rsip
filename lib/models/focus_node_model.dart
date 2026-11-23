@@ -388,4 +388,34 @@ class ProgressRecord {
             ? DateTime.tryParse(json['time'] as String) ?? DateTime.now()
             : DateTime.now(),
       );
+      
+}
+
+/// 快速归档分类方案
+class ArchivePresetModel {
+  final String id;
+  String name;
+  final Set<String> archivedNodeIds;
+
+  ArchivePresetModel({
+    required this.id,
+    required this.name,
+    required Set<String> archivedNodeIds,
+  }) : archivedNodeIds = Set.from(archivedNodeIds);
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'archivedNodeIds': archivedNodeIds.toList(),
+      };
+
+  factory ArchivePresetModel.fromJson(Map<String, dynamic> json) =>
+      ArchivePresetModel(
+        id: json['id'] as String,
+        name: json['name'] as String? ?? '未命名分类',
+        archivedNodeIds: (json['archivedNodeIds'] as List<dynamic>?)
+                ?.map((e) => e.toString())
+                .toSet() ??
+            {},
+      );
 }
