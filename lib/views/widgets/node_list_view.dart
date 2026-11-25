@@ -271,7 +271,7 @@ class NodeListView extends StatelessWidget {
     bool isArchivedInMode = false,
   }) {
     final isSelected = !isArchiveMode && node.id == engine.selectedNodeId;
-    final isCountMode = engine.displayMode == 1;
+    final displayMode = engine.displayMode;
 
     final scoreRes = engine.getNodeScore(node.id);
     final scoreColor = ProgressColorHelper.getScoreColor(scoreRes.score);
@@ -281,6 +281,12 @@ class NodeListView extends StatelessWidget {
         ProgressColorHelper.getIncreaseColor(node.increaseCount);
     final incBgColor =
         ProgressColorHelper.getIncreaseBgColor(node.increaseCount);
+
+    final consecutiveCount = engine.getNodeConsecutiveCount(node.id);
+    final consecutiveTextColor =
+        ProgressColorHelper.getIncreaseColor(consecutiveCount);
+    final consecutiveBgColor =
+        ProgressColorHelper.getIncreaseBgColor(consecutiveCount);
 
     final Color bgColor = isArchiveMode
         ? (isArchivedInMode ? const Color(0xFFD8E0E8) : AppTheme.surfaceWhite)
@@ -318,75 +324,101 @@ class NodeListView extends StatelessWidget {
                     ),
                   ),
                 ),
-                const SizedBox(width: 8),
-                Opacity(
-                  opacity: mutedOpacity,
-                  child: isCountMode
-                      ? Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 7,
-                                vertical: 2.5,
-                              ),
-                              decoration: BoxDecoration(
-                                color: incBgColor,
-                                borderRadius: BorderRadius.circular(5),
-                              ),
-                              child: Text(
-                                '+${node.increaseCount}',
-                                style: TextStyle(
-                                  color: incTextColor,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w900,
+                if (displayMode != 2 || consecutiveCount > 0) ...[
+                  const SizedBox(width: 8),
+                  Opacity(
+                    opacity: mutedOpacity,
+                    child: displayMode == 1
+                        ? Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 7,
+                                  vertical: 2.5,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: incBgColor,
+                                  borderRadius: BorderRadius.circular(5),
+                                ),
+                                child: Text(
+                                  '+${node.increaseCount}',
+                                  style: TextStyle(
+                                    color: incTextColor,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w900,
+                                  ),
                                 ),
                               ),
-                            ),
-                            const SizedBox(width: 4),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 7,
-                                vertical: 2.5,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.red.withValues(alpha: 0.12),
-                                borderRadius: BorderRadius.circular(5),
-                              ),
-                              child: Text(
-                                '-${node.decreaseCount}',
-                                style: TextStyle(
-                                  color: Colors.red.shade700,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w900,
+                              const SizedBox(width: 4),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 7,
+                                  vertical: 2.5,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.red.withValues(alpha: 0.12),
+                                  borderRadius: BorderRadius.circular(5),
+                                ),
+                                child: Text(
+                                  '-${node.decreaseCount}',
+                                  style: TextStyle(
+                                    color: Colors.red.shade700,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w900,
+                                  ),
                                 ),
                               ),
-                            ),
-                          ],
-                        )
-                      : Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 3,
-                          ),
-                          decoration: BoxDecoration(
-                            color: scoreBgColor,
-                            borderRadius: BorderRadius.circular(6),
-                            border: Border.all(
-                              color: scoreColor.withValues(alpha: 0.35),
-                              width: 0.8,
-                            ),
-                          ),
-                          child: Text(
-                            '${scoreRes.score.toStringAsFixed(1)}分',
-                            style: TextStyle(
-                              color: scoreColor,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                        ),
-                ),
+                            ],
+                          )
+                        : displayMode == 2
+                            ? Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 3,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: consecutiveBgColor,
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(
+                                    color: consecutiveTextColor.withValues(
+                                        alpha: 0.35),
+                                    width: 0.8,
+                                  ),
+                                ),
+                                child: Text(
+                                  '连续 $consecutiveCount 次',
+                                  style: TextStyle(
+                                    color: consecutiveTextColor,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                              )
+                            : Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 3,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: scoreBgColor,
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(
+                                    color: scoreColor.withValues(alpha: 0.35),
+                                    width: 0.8,
+                                  ),
+                                ),
+                                child: Text(
+                                  '${scoreRes.score.toStringAsFixed(1)}分',
+                                  style: TextStyle(
+                                    color: scoreColor,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                              ),
+                  ),
+                ],
               ],
             ),
             if (node.content.isNotEmpty) ...[

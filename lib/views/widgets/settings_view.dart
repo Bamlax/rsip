@@ -50,6 +50,17 @@ class SettingsView extends StatelessWidget {
                   Navigator.pop(ctx);
                 },
               ),
+              const SizedBox(height: 8),
+              _buildDisplayOptionTile(
+                context: ctx,
+                title: '连续次数显示',
+                subtitle: '显示当前连续正向打钩的次数',
+                isSelected: currentMode == 2,
+                onTap: () {
+                  engine.setDisplayMode(2);
+                  Navigator.pop(ctx);
+                },
+              ),
             ],
           ),
         );
@@ -256,7 +267,11 @@ class SettingsView extends StatelessWidget {
         ? '不延后 (00:00 开启新一天)'
         : '延后 $offset 小时 (凌晨 0$offset:00 前算作前一天)';
     final cfg = engine.scoreConfig;
-    final displayModeLabel = engine.displayMode == 0 ? '习惯连续性分数' : '直接显示加减次数';
+    final displayModeLabel = switch (engine.displayMode) {
+      1 => '直接显示加减次数',
+      2 => '连续次数显示',
+      _ => '习惯连续性分数',
+    };
 
     final webdavSubtitle = !engine.isWebDavConfigured
         ? '未配置服务器 · 支持同步全部数据与设置参数'

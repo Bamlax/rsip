@@ -12,6 +12,7 @@ class RsipEngine extends ChangeNotifier {
   final List<FocusGroupModel> _groups = [];
   final List<ProgressRecord> _history = [];
   final List<ArchivePresetModel> _archivePresets = [];
+  final List<TimelineEventModel> _timelineEvents = [];
 
   String? _selectedNodeId;
   FocusConnection? _selectedConnection;
@@ -24,12 +25,16 @@ class RsipEngine extends ChangeNotifier {
   final Set<String> _archiveSelectedIds = {};
   String? _selectedArchivePresetId;
 
+  // 时间轴回放模式状态
+  bool _isTimelineMode = false;
+  bool _timelineShowProgressChanges = false;
+
   int _dayStartHourOffset = 0;
   bool _autoPenalizeMissedYesterday = false;
   String? _lastAutoPenaltyDate;
   HabitScoreConfig _scoreConfig = HabitScoreConfig();
 
-  // 显示方式：0 = 习惯连续性分数，1 = 直接显示加减次数
+  // 显示方式：0 = 习惯连续性分数，1 = 直接显示加减次数，2 = 连续次数显示
   int _displayMode = 0;
 
   // WebDAV 配置与同步状态
@@ -56,6 +61,8 @@ class RsipEngine extends ChangeNotifier {
   List<ProgressRecord> get history => List.unmodifiable(_history.reversed);
   List<ArchivePresetModel> get archivePresets =>
       List.unmodifiable(_archivePresets);
+  List<TimelineEventModel> get timelineEvents =>
+      List.unmodifiable(_timelineEvents);
 
   String? get selectedNodeId => _selectedNodeId;
   FocusNodeModel? get selectedNode {
@@ -85,6 +92,9 @@ class RsipEngine extends ChangeNotifier {
     }
   }
 
+  bool get isTimelineMode => _isTimelineMode;
+  bool get timelineShowProgressChanges => _timelineShowProgressChanges;
+
   RsipEngine() {
     _loadFromStorage();
   }
@@ -98,6 +108,7 @@ class RsipEngine extends ChangeNotifier {
   static const String _keyGroups = 'rsip_groups_data';
   static const String _keyHistory = 'rsip_history_data';
   static const String _keyArchivePresets = 'rsip_archive_presets_data';
+  static const String _keyTimelineEvents = 'rsip_timeline_events_data';
   static const String _keyDayOffset = 'rsip_day_start_hour_offset';
   static const String _keyAutoPenalize = 'rsip_auto_penalize_missed_yesterday';
   static const String _keyLastPenaltyDate = 'rsip_last_auto_penalty_date';
@@ -117,7 +128,7 @@ class RsipEngine extends ChangeNotifier {
       _dayStartHourOffset = prefs.getInt(_keyDayOffset) ?? 0;
       _autoPenalizeMissedYesterday = prefs.getBool(_keyAutoPenalize) ?? false;
       _lastAutoPenaltyDate = prefs.getString(_keyLastPenaltyDate);
-      _displayMode = prefs.getInt(_keyDisplayMode) ?? 0;
+      _displayMode = (prefs.getInt(_keyDisplayMode) ?? 0).clamp(0, 2);
 
       _webdavUrl = prefs.getString(_keyWebdavUrl) ?? '';
       _webdavUsername = prefs.getString(_keyWebdavUser) ?? '';
@@ -169,6 +180,15 @@ class RsipEngine extends ChangeNotifier {
         _archivePresets.addAll(list.map((e) => ArchivePresetModel.fromJson(e)));
       }
 
+      final timelineJson = prefs.getString(_keyTimelineEvents);
+      if (timelineJson != null) {
+        final List list = jsonDecode(timelineJson);
+        _timelineEvents.clear();
+        _timelineEvents
+            .addAll(list.map((e) => TimelineEventModel.fromJson(e)));
+      }
+
+      _backfillMissingTimelineEvents();
       await _applyMissedYesterdayPenaltyIfNeeded(saveAfter: true);
 
       notifyListeners();
@@ -204,6 +224,10 @@ class RsipEngine extends ChangeNotifier {
         _keyArchivePresets,
         jsonEncode(_archivePresets.map((p) => p.toJson()).toList()),
       );
+      await prefs.setString(
+        _keyTimelineEvents,
+        jsonEncode(_timelineEvents.map((t) => t.toJson()).toList()),
+      );
       await prefs.setInt(_keyDayOffset, _dayStartHourOffset);
       await prefs.setBool(_keyAutoPenalize, _autoPenalizeMissedYesterday);
       await prefs.setInt(_keyDisplayMode, _displayMode);
@@ -229,6 +253,329 @@ class RsipEngine extends ChangeNotifier {
     } catch (e) {
       debugPrint('保存到本地存储失败: $e');
     }
+  }
+
+  // ==========================================
+  // 时间轴演化事件：兼容补全、播放控制与历史打分推演
+  // ==========================================
+
+  void toggleTimelineMode([bool? enabled]) {
+    final next = enabled ?? !_isTimelineMode;
+    if (_isTimelineMode == next) return;
+    _isTimelineMode = next;
+    if (next) {
+      _selectedNodeId = null;
+      _selectedConnection = null;
+      _isGroupSelectMode = false;
+      _groupSelectedNodeIds.clear();
+      _backfillMissingTimelineEvents();
+    }
+    notifyListeners();
+  }
+
+  void setTimelineShowProgressChanges(bool show) {
+    if (_timelineShowProgressChanges == show) return;
+    _timelineShowProgressChanges = show;
+    notifyListeners();
+  }
+
+  /// 为存量节点、大框与连线自动补全初始演化事件，兼容旧版本数据
+  void _backfillMissingTimelineEvents() {
+    final recordedCreatedNodeIds = _timelineEvents
+        .where((e) => e.type == TimelineEventType.nodeCreated)
+        .map((e) => e.targetId)
+        .toSet();
+
+    for (final node in _nodes) {
+      if (!recordedCreatedNodeIds.contains(node.id)) {
+        final edits = _history
+            .where((r) => r.isEdit && r.nodeId == node.id)
+            .toList()
+          ..sort((a, b) => a.time.compareTo(b.time));
+
+        final initTitle =
+            edits.isNotEmpty ? (edits.first.oldTitle ?? node.title) : node.title;
+        final initContent = edits.isNotEmpty
+            ? (edits.first.oldContent ?? node.content)
+            : node.content;
+
+        _timelineEvents.add(
+          TimelineEventModel(
+            id: 'init_node_${node.id}',
+            type: TimelineEventType.nodeCreated,
+            time: node.createdAt,
+            targetId: node.id,
+            title: initTitle,
+            content: initContent,
+            isPrompt: node.isPrompt,
+            isArchived: node.isArchived,
+            x: node.x,
+            y: node.y,
+          ),
+        );
+
+        for (final edit in edits) {
+          final editEventId = 'init_edit_${edit.id}';
+          if (!_timelineEvents.any((e) => e.id == editEventId)) {
+            _timelineEvents.add(
+              TimelineEventModel(
+                id: editEventId,
+                type: TimelineEventType.nodeUpdated,
+                time: edit.time,
+                targetId: node.id,
+                title: edit.newTitle ?? node.title,
+                content: edit.newContent ?? node.content,
+              ),
+            );
+          }
+        }
+      }
+    }
+
+    final recordedGroupIds = _timelineEvents
+        .where((e) => e.type == TimelineEventType.groupAdded)
+        .map((e) => e.targetId)
+        .toSet();
+
+    for (final group in _groups) {
+      if (!recordedGroupIds.contains(group.id)) {
+        _timelineEvents.add(
+          TimelineEventModel(
+            id: 'init_group_${group.id}',
+            type: TimelineEventType.groupAdded,
+            time: group.createdAt,
+            targetId: group.id,
+            title: group.title,
+            nodeIds: group.nodeIds.toList(),
+          ),
+        );
+      }
+    }
+
+    final recordedConnPairs = <String>{};
+    for (final e in _timelineEvents) {
+      if (e.type == TimelineEventType.connectionAdded &&
+          e.secondaryId != null) {
+        recordedConnPairs.add('${e.targetId}|${e.secondaryId}');
+        recordedConnPairs.add('${e.secondaryId}|${e.targetId}');
+      }
+    }
+
+    for (final conn in _connections) {
+      final key = '${conn.fromId}|${conn.toId}';
+      if (!recordedConnPairs.contains(key)) {
+        final fromNode = _nodes.where((n) => n.id == conn.fromId).firstOrNull;
+        final toNode = _nodes.where((n) => n.id == conn.toId).firstOrNull;
+        final fromGroup = _groups.where((g) => g.id == conn.fromId).firstOrNull;
+        final toGroup = _groups.where((g) => g.id == conn.toId).firstOrNull;
+
+        final t1 = fromNode?.createdAt ?? fromGroup?.createdAt ?? DateTime.now();
+        final t2 = toNode?.createdAt ?? toGroup?.createdAt ?? DateTime.now();
+        final connTime = t1.isAfter(t2) ? t1 : t2;
+
+        _timelineEvents.add(
+          TimelineEventModel(
+            id: 'init_conn_${conn.fromId}_${conn.toId}',
+            type: TimelineEventType.connectionAdded,
+            time: connTime,
+            targetId: conn.fromId,
+            secondaryId: conn.toId,
+          ),
+        );
+      }
+    }
+  }
+
+  /// 构建完整的时间轴有序事件列表（可选是否混入日常增减/跳过记录）
+  List<TimelineEventModel> buildOrderedTimelineEvents({
+    required bool includeProgressChanges,
+  }) {
+    final List<TimelineEventModel> combined = List.from(_timelineEvents);
+
+    if (includeProgressChanges) {
+      for (final r in _history) {
+        if (!r.isEdit && (r.delta != 0 || r.isSkip)) {
+          combined.add(
+            TimelineEventModel(
+              id: 'hist_${r.id}',
+              type: TimelineEventType.progressChanged,
+              time: r.time,
+              targetId: r.nodeId,
+              title: r.nodeTitle,
+              delta: r.delta,
+              isSkip: r.isSkip,
+              note: r.note,
+            ),
+          );
+        }
+      }
+    }
+
+    combined.sort((a, b) {
+      final cmp = a.time.compareTo(b.time);
+      if (cmp != 0) return cmp;
+      return _eventPriority(a.type).compareTo(_eventPriority(b.type));
+    });
+
+    return combined;
+  }
+
+  int _eventPriority(TimelineEventType type) {
+    switch (type) {
+      case TimelineEventType.nodeCreated:
+        return 0;
+      case TimelineEventType.groupAdded:
+        return 1;
+      case TimelineEventType.connectionAdded:
+        return 2;
+      case TimelineEventType.nodeUpdated:
+        return 3;
+      case TimelineEventType.progressChanged:
+        return 4;
+      case TimelineEventType.connectionRemoved:
+        return 5;
+      case TimelineEventType.groupRemoved:
+        return 6;
+      case TimelineEventType.nodeDeleted:
+        return 7;
+    }
+  }
+
+  /// 计算指定历史记录子集与参考日期下的习惯连续性得分（供时间轴回放使用）
+  NodeScoreResult computeNodeScoreFromRecords({
+    required String nodeId,
+    required DateTime createdAt,
+    required List<ProgressRecord> recordsUpToNow,
+    required DateTime referenceTime,
+  }) {
+    final refDate = getEffectiveDate(referenceTime);
+    final nodeRecords = recordsUpToNow
+        .where((r) => !r.isEdit && r.nodeId == nodeId && (r.delta != 0 || r.isSkip))
+        .toList();
+
+    final Map<DateTime, int> dailyNetDelta = {};
+    final Set<DateTime> dailySkipDates = {};
+    DateTime? earliestRecordDate;
+
+    for (final r in nodeRecords) {
+      final d = getEffectiveDate(r.time);
+      if (r.isSkip) {
+        dailySkipDates.add(d);
+      } else {
+        dailyNetDelta[d] = (dailyNetDelta[d] ?? 0) + r.delta;
+      }
+      if (earliestRecordDate == null || d.isBefore(earliestRecordDate)) {
+        earliestRecordDate = d;
+      }
+    }
+
+    final createdDate = getEffectiveDate(createdAt);
+    DateTime startDate = createdDate;
+    if (earliestRecordDate != null && earliestRecordDate.isBefore(startDate)) {
+      startDate = earliestRecordDate;
+    }
+
+    if (nodeRecords.isEmpty && !startDate.isBefore(refDate)) {
+      return const NodeScoreResult();
+    }
+
+    double energy = 0.0;
+    int streak = 0;
+    int lastBrokenStreak = 0;
+    bool justBroke = false;
+    final List<int> windowEvents = [];
+
+    for (DateTime d = startDate;
+        !d.isAfter(refDate);
+        d = DateTime(d.year, d.month, d.day + 1)) {
+      final hasDeltaOnDay = dailyNetDelta.containsKey(d);
+      final hasSkipOnDay = dailySkipDates.contains(d);
+      final isRefDay = _isSameDay(d, refDate);
+
+      if (isRefDay && !hasDeltaOnDay && !hasSkipOnDay) {
+        break;
+      }
+
+      if (hasDeltaOnDay) {
+        final net = dailyNetDelta[d]!;
+        if (net > 0) {
+          streak += 1;
+          energy += 1.0;
+          justBroke = false;
+          windowEvents.add(1);
+        } else {
+          lastBrokenStreak = streak;
+          streak = 0;
+          final gamma = math.max(
+            _scoreConfig.gammaMin,
+            _scoreConfig.gammaBase - (_scoreConfig.kDrop * lastBrokenStreak),
+          );
+          energy = energy * gamma;
+          justBroke = true;
+          windowEvents.add(0);
+        }
+      } else if (hasSkipOnDay) {
+        continue;
+      } else {
+        lastBrokenStreak = streak;
+        streak = 0;
+        final gamma = math.max(
+          _scoreConfig.gammaMin,
+          _scoreConfig.gammaBase - (_scoreConfig.kDrop * lastBrokenStreak),
+        );
+        energy = energy * gamma;
+        justBroke = true;
+        windowEvents.add(0);
+      }
+    }
+
+    if (windowEvents.isEmpty) {
+      return const NodeScoreResult();
+    }
+
+    final int wLimit = _scoreConfig.windowSize.clamp(1, 1000);
+    final List<int> recentWindow = windowEvents.length > wLimit
+        ? windowEvents.sublist(windowEvents.length - wLimit)
+        : windowEvents;
+
+    final int nW = recentWindow.length;
+
+    final double tau = _scoreConfig.tau <= 0.1 ? 14.0 : _scoreConfig.tau;
+    final double rVal = (1.0 - math.exp(-energy / tau)).clamp(0.0, 1.0);
+
+    double sumPow = 0.0;
+    int currentRun = 0;
+    final double p = _scoreConfig.powerP;
+    for (final x in recentWindow) {
+      if (x == 1) {
+        currentRun += 1;
+      } else {
+        if (currentRun > 0) {
+          sumPow += math.pow(currentRun, p).toDouble();
+          currentRun = 0;
+        }
+      }
+    }
+    if (currentRun > 0) {
+      sumPow += math.pow(currentRun, p).toDouble();
+    }
+
+    final double denom = math.pow(nW + _scoreConfig.coldStartK, p).toDouble();
+    final double hVal = denom > 0 ? (sumPow / denom).clamp(0.0, 1.0) : 0.0;
+
+    final double totalScore = (100.0 *
+            (_scoreConfig.weightR * rVal + _scoreConfig.weightH * hVal))
+        .clamp(0.0, 100.0);
+
+    return NodeScoreResult(
+      score: totalScore,
+      energy: energy,
+      streak: streak,
+      lastBrokenStreak: lastBrokenStreak,
+      rValue: rVal,
+      hValue: hVal,
+      justBrokeStreak: justBroke,
+    );
   }
 
   // ==========================================
@@ -397,6 +744,7 @@ class RsipEngine extends ChangeNotifier {
         'groups': _groups.map((g) => g.toJson()).toList(),
         'history': _history.map((h) => h.toJson()).toList(),
         'archivePresets': _archivePresets.map((p) => p.toJson()).toList(),
+        'timelineEvents': _timelineEvents.map((t) => t.toJson()).toList(),
       },
     };
     return const JsonEncoder.withIndent('  ').convert(payload);
@@ -636,7 +984,7 @@ class RsipEngine extends ChangeNotifier {
           settingsMap['autoPenalizeMissedYesterday'] as bool? ?? false;
       _lastAutoPenaltyDate = settingsMap['lastAutoPenaltyDate'] as String?;
       _displayMode =
-          ((settingsMap['displayMode'] as num?)?.toInt() ?? 0) == 1 ? 1 : 0;
+          ((settingsMap['displayMode'] as num?)?.toInt() ?? 0).clamp(0, 2);
 
       if (settingsMap['scoreConfig'] is Map<String, dynamic>) {
         _scoreConfig = HabitScoreConfig.fromJson(
@@ -650,6 +998,7 @@ class RsipEngine extends ChangeNotifier {
     final groupsList = (dataMap['groups'] as List<dynamic>?) ?? [];
     final historyList = (dataMap['history'] as List<dynamic>?) ?? [];
     final presetsList = (dataMap['archivePresets'] as List<dynamic>?) ?? [];
+    final timelineList = (dataMap['timelineEvents'] as List<dynamic>?) ?? [];
 
     _nodes
       ..clear()
@@ -677,6 +1026,14 @@ class RsipEngine extends ChangeNotifier {
         presetsList
             .map((e) => ArchivePresetModel.fromJson(e as Map<String, dynamic>)),
       );
+    _timelineEvents
+      ..clear()
+      ..addAll(
+        timelineList
+            .map((e) => TimelineEventModel.fromJson(e as Map<String, dynamic>)),
+      );
+
+    _backfillMissingTimelineEvents();
 
     _selectedNodeId = null;
     _selectedConnection = null;
@@ -685,6 +1042,7 @@ class RsipEngine extends ChangeNotifier {
     _isArchiveMode = false;
     _archiveSelectedIds.clear();
     _selectedArchivePresetId = null;
+    _isTimelineMode = false;
 
     final cloudExportedAt = decoded['exportedAt'] is String
         ? DateTime.tryParse(decoded['exportedAt'] as String)
@@ -695,15 +1053,41 @@ class RsipEngine extends ChangeNotifier {
   }
 
   // ==========================================
-  // 显示方式切换 (0: 分数, 1: 加减次数)
+  // 显示方式切换 (0: 分数, 1: 加减次数, 2: 连续次数)
   // ==========================================
 
   void setDisplayMode(int mode) {
-    final normalized = mode == 1 ? 1 : 0;
+    final normalized = mode.clamp(0, 2);
     if (_displayMode == normalized) return;
     _displayMode = normalized;
     notifyListeners();
     _saveToStorage();
+  }
+
+  int getNodeConsecutiveCount(String nodeId) {
+    final nodeRecords = <MapEntry<int, ProgressRecord>>[];
+    for (int i = 0; i < _history.length; i++) {
+      final r = _history[i];
+      if (!r.isEdit && !r.isSkip && r.nodeId == nodeId && r.delta != 0) {
+        nodeRecords.add(MapEntry(i, r));
+      }
+    }
+    if (nodeRecords.isEmpty) return 0;
+
+    nodeRecords.sort((a, b) {
+      final cmp = a.value.time.compareTo(b.value.time);
+      return cmp != 0 ? cmp : a.key.compareTo(b.key);
+    });
+
+    int consecutive = 0;
+    for (int i = nodeRecords.length - 1; i >= 0; i--) {
+      if (nodeRecords[i].value.delta > 0) {
+        consecutive++;
+      } else {
+        break;
+      }
+    }
+    return consecutive;
   }
 
   // ==========================================
@@ -790,133 +1174,11 @@ class RsipEngine extends ChangeNotifier {
     final node = _nodes[nodeIndex];
     if (node.isPrompt) return const NodeScoreResult();
 
-    final today = getEffectiveDate(DateTime.now());
-    final nodeRecords = _history
-        .where((r) => !r.isEdit && r.nodeId == nodeId && (r.delta != 0 || r.isSkip))
-        .toList();
-
-    final Map<DateTime, int> dailyNetDelta = {};
-    final Set<DateTime> dailySkipDates = {};
-    DateTime? earliestRecordDate;
-
-    for (final r in nodeRecords) {
-      final d = getEffectiveDate(r.time);
-      if (r.isSkip) {
-        dailySkipDates.add(d);
-      } else {
-        dailyNetDelta[d] = (dailyNetDelta[d] ?? 0) + r.delta;
-      }
-      if (earliestRecordDate == null || d.isBefore(earliestRecordDate)) {
-        earliestRecordDate = d;
-      }
-    }
-
-    final createdDate = getEffectiveDate(node.createdAt);
-    DateTime startDate = createdDate;
-    if (earliestRecordDate != null && earliestRecordDate.isBefore(startDate)) {
-      startDate = earliestRecordDate;
-    }
-
-    if (nodeRecords.isEmpty && !startDate.isBefore(today)) {
-      return const NodeScoreResult();
-    }
-
-    double energy = 0.0;
-    int streak = 0;
-    int lastBrokenStreak = 0;
-    bool justBroke = false;
-    final List<int> windowEvents = [];
-
-    for (DateTime d = startDate;
-        !d.isAfter(today);
-        d = DateTime(d.year, d.month, d.day + 1)) {
-      final hasDeltaOnDay = dailyNetDelta.containsKey(d);
-      final hasSkipOnDay = dailySkipDates.contains(d);
-      final isToday = _isSameDay(d, today);
-
-      if (isToday && !hasDeltaOnDay && !hasSkipOnDay) {
-        break;
-      }
-
-      if (hasDeltaOnDay) {
-        final net = dailyNetDelta[d]!;
-        if (net > 0) {
-          streak += 1;
-          energy += 1.0;
-          justBroke = false;
-          windowEvents.add(1);
-        } else {
-          lastBrokenStreak = streak;
-          streak = 0;
-          final gamma = math.max(
-            _scoreConfig.gammaMin,
-            _scoreConfig.gammaBase - (_scoreConfig.kDrop * lastBrokenStreak),
-          );
-          energy = energy * gamma;
-          justBroke = true;
-          windowEvents.add(0);
-        }
-      } else if (hasSkipOnDay) {
-        continue;
-      } else {
-        lastBrokenStreak = streak;
-        streak = 0;
-        final gamma = math.max(
-          _scoreConfig.gammaMin,
-          _scoreConfig.gammaBase - (_scoreConfig.kDrop * lastBrokenStreak),
-        );
-        energy = energy * gamma;
-        justBroke = true;
-        windowEvents.add(0);
-      }
-    }
-
-    if (windowEvents.isEmpty) {
-      return const NodeScoreResult();
-    }
-
-    final int wLimit = _scoreConfig.windowSize.clamp(1, 1000);
-    final List<int> recentWindow = windowEvents.length > wLimit
-        ? windowEvents.sublist(windowEvents.length - wLimit)
-        : windowEvents;
-
-    final int nW = recentWindow.length;
-
-    final double tau = _scoreConfig.tau <= 0.1 ? 14.0 : _scoreConfig.tau;
-    final double rVal = (1.0 - math.exp(-energy / tau)).clamp(0.0, 1.0);
-
-    double sumPow = 0.0;
-    int currentRun = 0;
-    final double p = _scoreConfig.powerP;
-    for (final x in recentWindow) {
-      if (x == 1) {
-        currentRun += 1;
-      } else {
-        if (currentRun > 0) {
-          sumPow += math.pow(currentRun, p).toDouble();
-          currentRun = 0;
-        }
-      }
-    }
-    if (currentRun > 0) {
-      sumPow += math.pow(currentRun, p).toDouble();
-    }
-
-    final double denom = math.pow(nW + _scoreConfig.coldStartK, p).toDouble();
-    final double hVal = denom > 0 ? (sumPow / denom).clamp(0.0, 1.0) : 0.0;
-
-    final double totalScore = (100.0 *
-            (_scoreConfig.weightR * rVal + _scoreConfig.weightH * hVal))
-        .clamp(0.0, 100.0);
-
-    return NodeScoreResult(
-      score: totalScore,
-      energy: energy,
-      streak: streak,
-      lastBrokenStreak: lastBrokenStreak,
-      rValue: rVal,
-      hValue: hVal,
-      justBrokeStreak: justBroke,
+    return computeNodeScoreFromRecords(
+      nodeId: nodeId,
+      createdAt: node.createdAt,
+      recordsUpToNow: _history,
+      referenceTime: DateTime.now(),
     );
   }
 
@@ -967,7 +1229,6 @@ class RsipEngine extends ChangeNotifier {
       _archiveSelectedIds.add(id);
     }
 
-    // 选中某分类名时，点击卡片直接同步增改该分类的归档内容
     if (_selectedArchivePresetId != null) {
       final presetIdx =
           _archivePresets.indexWhere((p) => p.id == _selectedArchivePresetId);
@@ -984,7 +1245,6 @@ class RsipEngine extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 将当前归档状态保存为一个新的命名分类
   void addArchivePreset(String name) {
     final trimmed = name.trim();
     if (trimmed.isEmpty) return;
@@ -1000,18 +1260,6 @@ class RsipEngine extends ChangeNotifier {
     _saveToStorage();
   }
 
-  /// 修改指定分类的名称
-  void renameArchivePreset(String presetId, String newName) {
-    final trimmed = newName.trim();
-    if (trimmed.isEmpty) return;
-    final idx = _archivePresets.indexWhere((p) => p.id == presetId);
-    if (idx == -1) return;
-    _archivePresets[idx].name = trimmed;
-    notifyListeners();
-    _saveToStorage();
-  }
-
-  /// 点击分类名：选中并自动应用其归档情况；再次点击已选中分类则取消选中
   void selectArchivePreset(String presetId) {
     if (_selectedArchivePresetId == presetId) {
       _selectedArchivePresetId = null;
@@ -1035,7 +1283,6 @@ class RsipEngine extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 长按分类名删除该分类
   void deleteArchivePreset(String presetId) {
     _archivePresets.removeWhere((p) => p.id == presetId);
     if (_selectedArchivePresetId == presetId) {
@@ -1183,17 +1430,45 @@ class RsipEngine extends ChangeNotifier {
 
   void addGroup({required String title, required Set<String> nodeIds}) {
     if (nodeIds.isEmpty) return;
+    final now = DateTime.now();
     final group = FocusGroupModel(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      id: now.millisecondsSinceEpoch.toString(),
       title: title,
       nodeIds: nodeIds,
+      createdAt: now,
     );
     _groups.add(group);
+    _timelineEvents.add(
+      TimelineEventModel(
+        id: 'evt_${now.microsecondsSinceEpoch}',
+        type: TimelineEventType.groupAdded,
+        time: now,
+        targetId: group.id,
+        title: title,
+        nodeIds: nodeIds.toList(),
+      ),
+    );
     notifyListeners();
     _saveToStorage();
   }
 
   void deleteGroup(String groupId) {
+    final targetGroup = _groups.where((g) => g.id == groupId).firstOrNull;
+    final now = DateTime.now();
+
+    if (targetGroup != null) {
+      _timelineEvents.add(
+        TimelineEventModel(
+          id: 'evt_${now.microsecondsSinceEpoch}',
+          type: TimelineEventType.groupRemoved,
+          time: now,
+          targetId: groupId,
+          title: targetGroup.title,
+          nodeIds: targetGroup.nodeIds.toList(),
+        ),
+      );
+    }
+
     _groups.removeWhere((g) => g.id == groupId);
     _connections.removeWhere((conn) => conn.fromId == groupId || conn.toId == groupId);
     if (_selectedConnection != null &&
@@ -1221,6 +1496,16 @@ class RsipEngine extends ChangeNotifier {
     final conn = FocusConnection(fromId: nodeAId, toId: nodeBId);
     final isNew = _connections.add(conn);
     if (isNew) {
+      final now = DateTime.now();
+      _timelineEvents.add(
+        TimelineEventModel(
+          id: 'evt_${now.microsecondsSinceEpoch}',
+          type: TimelineEventType.connectionAdded,
+          time: now,
+          targetId: nodeAId,
+          secondaryId: nodeBId,
+        ),
+      );
       notifyListeners();
       _saveToStorage();
     }
@@ -1228,7 +1513,19 @@ class RsipEngine extends ChangeNotifier {
   }
 
   void deleteConnection(FocusConnection conn) {
-    _connections.remove(conn);
+    final removed = _connections.remove(conn);
+    if (removed) {
+      final now = DateTime.now();
+      _timelineEvents.add(
+        TimelineEventModel(
+          id: 'evt_${now.microsecondsSinceEpoch}',
+          type: TimelineEventType.connectionRemoved,
+          time: now,
+          targetId: conn.fromId,
+          secondaryId: conn.toId,
+        ),
+      );
+    }
     if (_selectedConnection == conn) {
       _selectedConnection = null;
     }
@@ -1255,6 +1552,30 @@ class RsipEngine extends ChangeNotifier {
     if (index != -1) {
       _nodes[index].x = x;
       _nodes[index].y = y;
+
+      // 同步更新该节点在时间轴中的最新坐标，使回放布局整洁清晰
+      for (int i = _timelineEvents.length - 1; i >= 0; i--) {
+        if (_timelineEvents[i].targetId == id &&
+            _timelineEvents[i].type == TimelineEventType.nodeCreated) {
+          final old = _timelineEvents[i];
+          _timelineEvents[i] = TimelineEventModel(
+            id: old.id,
+            type: old.type,
+            time: old.time,
+            targetId: old.targetId,
+            secondaryId: old.secondaryId,
+            title: old.title,
+            content: old.content,
+            isPrompt: old.isPrompt,
+            isArchived: old.isArchived,
+            x: x,
+            y: y,
+            nodeIds: old.nodeIds,
+          );
+          break;
+        }
+      }
+
       notifyListeners();
       _saveToStorage();
     }
@@ -1284,8 +1605,9 @@ class RsipEngine extends ChangeNotifier {
       targetY = sumY / _nodes.length;
     }
 
+    final now = DateTime.now();
     final newNode = FocusNodeModel(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      id: now.millisecondsSinceEpoch.toString(),
       title: title,
       content: content,
       isPrompt: isPrompt,
@@ -1294,13 +1616,63 @@ class RsipEngine extends ChangeNotifier {
       numericAttributes: numericAttributes,
       x: targetX,
       y: targetY,
+      createdAt: now,
     );
     _nodes.add(newNode);
+    _timelineEvents.add(
+      TimelineEventModel(
+        id: 'evt_${now.microsecondsSinceEpoch}',
+        type: TimelineEventType.nodeCreated,
+        time: now,
+        targetId: newNode.id,
+        title: title,
+        content: content,
+        isPrompt: isPrompt,
+        isArchived: false,
+        x: targetX,
+        y: targetY,
+      ),
+    );
     notifyListeners();
     _saveToStorage();
   }
 
   void deleteNode(String id) {
+    final targetNode = _nodes.where((n) => n.id == id).firstOrNull;
+    final now = DateTime.now();
+
+    if (targetNode != null) {
+      // 先记录关联连线移除事件，再记录节点删除事件
+      final relatedConns = _connections
+          .where((conn) => conn.fromId == id || conn.toId == id)
+          .toList();
+      for (final conn in relatedConns) {
+        _timelineEvents.add(
+          TimelineEventModel(
+            id: 'evt_${now.microsecondsSinceEpoch}_${conn.fromId}_${conn.toId}',
+            type: TimelineEventType.connectionRemoved,
+            time: now,
+            targetId: conn.fromId,
+            secondaryId: conn.toId,
+          ),
+        );
+      }
+
+      _timelineEvents.add(
+        TimelineEventModel(
+          id: 'evt_${now.microsecondsSinceEpoch}_del',
+          type: TimelineEventType.nodeDeleted,
+          time: now,
+          targetId: id,
+          title: targetNode.title,
+          content: targetNode.content,
+          isPrompt: targetNode.isPrompt,
+          x: targetNode.x,
+          y: targetNode.y,
+        ),
+      );
+    }
+
     if (_selectedNodeId == id) _selectedNodeId = null;
     _nodes.removeWhere((node) => node.id == id);
     _connections.removeWhere((conn) => conn.fromId == id || conn.toId == id);
@@ -1337,6 +1709,7 @@ class RsipEngine extends ChangeNotifier {
     final target = _nodes.firstWhere((n) => n.id == id);
     final prevTitle = target.title;
     final prevContent = target.content;
+    final now = DateTime.now();
 
     if (promptNoteOnIncrease != null) {
       target.promptNoteOnIncrease = promptNoteOnIncrease;
@@ -1375,11 +1748,25 @@ class RsipEngine extends ChangeNotifier {
       target.numericAttributes = List.from(numericAttributes);
     }
 
+    if (prevTitle != newTitle || prevContent != newContent) {
+      _timelineEvents.add(
+        TimelineEventModel(
+          id: 'evt_${now.microsecondsSinceEpoch}',
+          type: TimelineEventType.nodeUpdated,
+          time: now,
+          targetId: id,
+          title: newTitle,
+          content: newContent,
+          isPrompt: target.isPrompt,
+        ),
+      );
+    }
+
     if (recordToHistory) {
       target.version += 1;
       _history.add(
         ProgressRecord(
-          id: DateTime.now().millisecondsSinceEpoch.toString(),
+          id: now.millisecondsSinceEpoch.toString(),
           nodeId: target.id,
           nodeTitle: target.title,
           delta: 0,
@@ -1391,7 +1778,7 @@ class RsipEngine extends ChangeNotifier {
           oldContent: prevContent,
           newContent: newContent,
           attributeChanges: attributeChanges,
-          time: DateTime.now(),
+          time: now,
         ),
       );
     }

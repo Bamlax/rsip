@@ -36,6 +36,14 @@ class VersionHistoryConfig {
 
   static const List<VersionRelease> releases = [
       VersionRelease(
+      version: '0.11.0',
+      releaseDate: '2026-11-25',
+      changeLogs: [
+        '新增：时间轴功能',
+        '新增：显示连续天数功能',
+      ],
+    ),
+      VersionRelease(
       version: '0.10.0',
       releaseDate: '2026-11-23',
       changeLogs: [

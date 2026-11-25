@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -21,6 +22,76 @@ class NodeCanvasView extends StatefulWidget {
   State<NodeCanvasView> createState() => _NodeCanvasViewState();
 }
 
+/// 时间轴某一帧上的虚拟节点快照
+class _TimelineNodeSnapshot {
+  final String id;
+  String title;
+  String content;
+  final bool isPrompt;
+  final bool isArchived;
+  final double x;
+  final double y;
+  final DateTime createdAt;
+
+  int progress = 0;
+  int increaseCount = 0;
+  int decreaseCount = 0;
+  int consecutiveCount = 0;
+  double score = 0.0;
+
+  // 当前帧特效标记：'created' | 'updated' | 'deleted' | 'inc' | 'dec' | 'skip' | null
+  String? activeEffect;
+
+  _TimelineNodeSnapshot({
+    required this.id,
+    required this.title,
+    required this.content,
+    required this.isPrompt,
+    required this.isArchived,
+    required this.x,
+    required this.y,
+    required this.createdAt,
+  });
+}
+
+class _TimelineConnectionSnapshot {
+  final String fromId;
+  final String toId;
+  String? activeEffect; // 'added' | 'removed' | null
+
+  _TimelineConnectionSnapshot({
+    required this.fromId,
+    required this.toId,
+  });
+}
+
+class _TimelineGroupSnapshot {
+  final String id;
+  final String title;
+  final Set<String> nodeIds;
+  String? activeEffect; // 'added' | 'removed' | null
+
+  _TimelineGroupSnapshot({
+    required this.id,
+    required this.title,
+    required Set<String> nodeIds,
+  }) : nodeIds = Set.from(nodeIds);
+}
+
+class _TimelineFrameState {
+  final List<_TimelineNodeSnapshot> nodes;
+  final List<_TimelineConnectionSnapshot> connections;
+  final List<_TimelineGroupSnapshot> groups;
+  final TimelineEventModel? currentEvent;
+
+  const _TimelineFrameState({
+    required this.nodes,
+    required this.connections,
+    required this.groups,
+    this.currentEvent,
+  });
+}
+
 class _NodeCanvasViewState extends State<NodeCanvasView> {
   final TransformationController _transController = TransformationController();
   final GlobalKey _canvasKey = GlobalKey();
@@ -39,10 +110,17 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
   Offset? _groupDragStartFingerPos;
   Map<String, Offset>? _groupDragStartPositions;
 
-  // 单个节点拖拽状态（记录场景坐标起点，消除缩放偏移）
+  // 单个节点拖拽状态
   String? _draggingNodeId;
   Offset? _nodeDragStartPos;
   Offset? _nodeDragStartFingerPos;
+
+  // 时间轴回放控制状态
+  bool _wasTimelineMode = false;
+  bool _isTimelinePlaying = false;
+  int _timelineStepIndex = 0;
+  double _playbackSpeed = 1.0; // 1.0, 2.0, 4.0
+  Timer? _playbackTimer;
 
   @override
   void initState() {
@@ -51,10 +129,333 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
   }
 
   @override
+  void dispose() {
+    _playbackTimer?.cancel();
+    _transController.dispose();
+    super.dispose();
+  }
+
+  @override
   void didUpdateWidget(covariant NodeCanvasView oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!widget.isConnectMode && _connectStartId != null) {
       setState(() => _connectStartId = null);
+    }
+  }
+
+  void _syncTimelineLifecycle() {
+    final isTimeline = widget.engine.isTimelineMode;
+    if (isTimeline && !_wasTimelineMode) {
+      _wasTimelineMode = true;
+      final events = widget.engine.buildOrderedTimelineEvents(
+        includeProgressChanges: widget.engine.timelineShowProgressChanges,
+      );
+      _timelineStepIndex = 0;
+      if (events.isNotEmpty) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && widget.engine.isTimelineMode) {
+            _startTimelinePlayback();
+          }
+        });
+      }
+    } else if (!isTimeline && _wasTimelineMode) {
+      _wasTimelineMode = false;
+      _stopTimelinePlayback();
+    }
+  }
+
+  void _startTimelinePlayback() {
+    _playbackTimer?.cancel();
+    final events = widget.engine.buildOrderedTimelineEvents(
+      includeProgressChanges: widget.engine.timelineShowProgressChanges,
+    );
+    if (events.isEmpty) return;
+
+    if (_timelineStepIndex >= events.length - 1) {
+      setState(() => _timelineStepIndex = 0);
+    }
+
+    setState(() => _isTimelinePlaying = true);
+    final intervalMs = (900 / _playbackSpeed).round().clamp(180, 1200);
+
+    _playbackTimer = Timer.periodic(Duration(milliseconds: intervalMs), (timer) {
+      if (!mounted || !widget.engine.isTimelineMode) {
+        timer.cancel();
+        return;
+      }
+      final currentEvents = widget.engine.buildOrderedTimelineEvents(
+        includeProgressChanges: widget.engine.timelineShowProgressChanges,
+      );
+      if (_timelineStepIndex < currentEvents.length - 1) {
+        setState(() {
+          _timelineStepIndex++;
+        });
+      } else {
+        _stopTimelinePlayback();
+      }
+    });
+  }
+
+  void _stopTimelinePlayback() {
+    _playbackTimer?.cancel();
+    _playbackTimer = null;
+    if (mounted && _isTimelinePlaying) {
+      setState(() => _isTimelinePlaying = false);
+    }
+  }
+
+  void _cyclePlaybackSpeed() {
+    setState(() {
+      if (_playbackSpeed == 1.0) {
+        _playbackSpeed = 2.0;
+      } else if (_playbackSpeed == 2.0) {
+        _playbackSpeed = 4.0;
+      } else {
+        _playbackSpeed = 1.0;
+      }
+    });
+    if (_isTimelinePlaying) {
+      _startTimelinePlayback();
+    }
+  }
+
+  /// 基于有序事件列表推演截至 stepIndex 的完整画布状态快照
+  _TimelineFrameState _computeTimelineFrame(
+    List<TimelineEventModel> events,
+    int stepIndex,
+    bool showProgressChanges,
+  ) {
+    if (events.isEmpty) {
+      return const _TimelineFrameState(
+        nodes: [],
+        connections: [],
+        groups: [],
+      );
+    }
+
+    final clampedStep = stepIndex.clamp(0, events.length - 1);
+    final Map<String, _TimelineNodeSnapshot> nodeMap = {};
+    final List<_TimelineConnectionSnapshot> connList = [];
+    final Map<String, _TimelineGroupSnapshot> groupMap = {};
+    final List<ProgressRecord> recordsUpToStep = [];
+
+    for (int i = 0; i <= clampedStep; i++) {
+      final evt = events[i];
+      final isCurrentFrame = i == clampedStep;
+
+      // 清除上一帧的瞬时高亮状态
+      for (final n in nodeMap.values) {
+        n.activeEffect = null;
+      }
+      for (final c in connList) {
+        c.activeEffect = null;
+      }
+      for (final g in groupMap.values) {
+        g.activeEffect = null;
+      }
+
+      switch (evt.type) {
+        case TimelineEventType.nodeCreated:
+          final liveNode = widget.engine.nodes
+              .where((n) => n.id == evt.targetId)
+              .firstOrNull;
+          final snap = _TimelineNodeSnapshot(
+            id: evt.targetId,
+            title: evt.title ?? liveNode?.title ?? '',
+            content: evt.content ?? liveNode?.content ?? '',
+            isPrompt: evt.isPrompt,
+            isArchived: liveNode?.isArchived ?? evt.isArchived,
+            x: (liveNode?.x ?? evt.x ?? _canvasWidth / 2)
+                .clamp(50.0, _canvasWidth - 50.0),
+            y: (liveNode?.y ?? evt.y ?? _canvasHeight / 2)
+                .clamp(50.0, _canvasHeight - 50.0),
+            createdAt: evt.time,
+          );
+          if (isCurrentFrame) snap.activeEffect = 'created';
+          nodeMap[evt.targetId] = snap;
+          break;
+
+        case TimelineEventType.nodeUpdated:
+          final snap = nodeMap[evt.targetId];
+          if (snap != null) {
+            if (evt.title != null) snap.title = evt.title!;
+            if (evt.content != null) snap.content = evt.content!;
+            if (isCurrentFrame) snap.activeEffect = 'updated';
+          }
+          break;
+
+        case TimelineEventType.nodeDeleted:
+          if (isCurrentFrame) {
+            final snap = nodeMap[evt.targetId] ??
+                _TimelineNodeSnapshot(
+                  id: evt.targetId,
+                  title: evt.title ?? '已删除国策',
+                  content: evt.content ?? '',
+                  isPrompt: evt.isPrompt,
+                  isArchived: false,
+                  x: (evt.x ?? _canvasWidth / 2)
+                      .clamp(50.0, _canvasWidth - 50.0),
+                  y: (evt.y ?? _canvasHeight / 2)
+                      .clamp(50.0, _canvasHeight - 50.0),
+                  createdAt: evt.time,
+                );
+            snap.activeEffect = 'deleted';
+            nodeMap[evt.targetId] = snap;
+          } else {
+            nodeMap.remove(evt.targetId);
+            connList.removeWhere(
+              (c) => c.fromId == evt.targetId || c.toId == evt.targetId,
+            );
+            for (final g in groupMap.values) {
+              g.nodeIds.remove(evt.targetId);
+            }
+          }
+          break;
+
+        case TimelineEventType.connectionAdded:
+          final toId = evt.secondaryId;
+          if (toId != null) {
+            final exists = connList.any((c) =>
+                (c.fromId == evt.targetId && c.toId == toId) ||
+                (c.fromId == toId && c.toId == evt.targetId));
+            if (!exists) {
+              final connSnap = _TimelineConnectionSnapshot(
+                fromId: evt.targetId,
+                toId: toId,
+              );
+              if (isCurrentFrame) connSnap.activeEffect = 'added';
+              connList.add(connSnap);
+            }
+          }
+          break;
+
+        case TimelineEventType.connectionRemoved:
+          final toId = evt.secondaryId;
+          if (toId != null) {
+            if (isCurrentFrame) {
+              for (final c in connList) {
+                if ((c.fromId == evt.targetId && c.toId == toId) ||
+                    (c.fromId == toId && c.toId == evt.targetId)) {
+                  c.activeEffect = 'removed';
+                }
+              }
+            } else {
+              connList.removeWhere((c) =>
+                  (c.fromId == evt.targetId && c.toId == toId) ||
+                  (c.fromId == toId && c.toId == evt.targetId));
+            }
+          }
+          break;
+
+        case TimelineEventType.groupAdded:
+          final gSnap = _TimelineGroupSnapshot(
+            id: evt.targetId,
+            title: evt.title ?? '分类组',
+            nodeIds: (evt.nodeIds ?? []).toSet(),
+          );
+          if (isCurrentFrame) gSnap.activeEffect = 'added';
+          groupMap[evt.targetId] = gSnap;
+          break;
+
+        case TimelineEventType.groupRemoved:
+          if (isCurrentFrame) {
+            final gSnap = groupMap[evt.targetId];
+            if (gSnap != null) {
+              gSnap.activeEffect = 'removed';
+            }
+          } else {
+            groupMap.remove(evt.targetId);
+            connList.removeWhere(
+              (c) => c.fromId == evt.targetId || c.toId == evt.targetId,
+            );
+          }
+          break;
+
+        case TimelineEventType.progressChanged:
+          final snap = nodeMap[evt.targetId];
+          if (snap != null && !snap.isPrompt) {
+            if (!evt.isSkip) {
+              snap.progress += evt.delta;
+              if (evt.delta > 0) {
+                snap.increaseCount += 1;
+                snap.consecutiveCount += 1;
+              } else if (evt.delta < 0) {
+                snap.decreaseCount += 1;
+                snap.consecutiveCount = 0;
+              }
+            }
+            if (isCurrentFrame) {
+              snap.activeEffect =
+                  evt.isSkip ? 'skip' : (evt.delta > 0 ? 'inc' : 'dec');
+            }
+          }
+          recordsUpToStep.add(
+            ProgressRecord(
+              id: evt.id,
+              nodeId: evt.targetId,
+              nodeTitle: evt.title ?? '',
+              delta: evt.delta,
+              resultProgress: snap?.progress ?? 0,
+              isSkip: evt.isSkip,
+              time: evt.time,
+            ),
+          );
+          break;
+      }
+    }
+
+    final currentEvt = events[clampedStep];
+
+    // 若开启了「显示增减变化」，实时计算当前帧各常规节点的习惯分数
+    if (showProgressChanges) {
+      for (final snap in nodeMap.values) {
+        if (snap.isPrompt) continue;
+        final res = widget.engine.computeNodeScoreFromRecords(
+          nodeId: snap.id,
+          createdAt: snap.createdAt,
+          recordsUpToNow: recordsUpToStep,
+          referenceTime: currentEvt.time,
+        );
+        snap.score = res.score;
+      }
+    }
+
+    return _TimelineFrameState(
+      nodes: nodeMap.values.toList(),
+      connections: connList,
+      groups: groupMap.values.toList(),
+      currentEvent: currentEvt,
+    );
+  }
+
+  String _formatEventTimestamp(DateTime dt) {
+    return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} '
+        '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+  }
+
+  String _describeTimelineEvent(TimelineEventModel evt) {
+    final typePrefix = evt.isPrompt ? '提示' : '国策';
+    final name = (evt.title != null && evt.title!.isNotEmpty)
+        ? '「${evt.title}」'
+        : '';
+    switch (evt.type) {
+      case TimelineEventType.nodeCreated:
+        return '新增$typePrefix $name';
+      case TimelineEventType.nodeUpdated:
+        return '修订$typePrefix $name';
+      case TimelineEventType.nodeDeleted:
+        return '删除$typePrefix $name';
+      case TimelineEventType.connectionAdded:
+        return '建立节点连线';
+      case TimelineEventType.connectionRemoved:
+        return '移除节点连线';
+      case TimelineEventType.groupAdded:
+        return '创建大节点 $name';
+      case TimelineEventType.groupRemoved:
+        return '解散大节点 $name';
+      case TimelineEventType.progressChanged:
+        if (evt.isSkip) return '$name 跳过';
+        return evt.delta > 0 ? '$name +1' : '$name -1';
     }
   }
 
@@ -86,6 +487,7 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
   }
 
   void _onCanvasTap() {
+    if (widget.engine.isTimelineMode) return;
     if (widget.engine.isGroupSelectMode) return;
     if (_connectStartId != null) {
       setState(() => _connectStartId = null);
@@ -95,6 +497,7 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
   }
 
   void _onCanvasDoubleTap(TapDownDetails details) {
+    if (widget.engine.isTimelineMode) return;
     if (widget.engine.isGroupSelectMode) return;
     final scenePos = _transController.toScene(details.localPosition);
     showDialog(
@@ -107,6 +510,7 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
   }
 
   void _onNodeTap(FocusNodeModel node) {
+    if (widget.engine.isTimelineMode) return;
     if (widget.engine.isGroupSelectMode) {
       widget.engine.toggleNodeInGroupSelect(node.id);
       return;
@@ -121,6 +525,7 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
   }
 
   void _onGroupTap(FocusGroupModel group) {
+    if (widget.engine.isTimelineMode) return;
     if (widget.isConnectMode) {
       _handleConnectTap(group.id);
     }
@@ -192,6 +597,12 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
 
   @override
   Widget build(BuildContext context) {
+    _syncTimelineLifecycle();
+
+    if (widget.engine.isTimelineMode) {
+      return _buildTimelinePlaybackCanvas();
+    }
+
     final nodes = widget.engine.nodes;
     final groups = widget.engine.groups;
 
@@ -278,12 +689,915 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
     );
   }
 
+  // ==========================================
+  // 时间轴回放画布与顶部控制栏
+  // ==========================================
+
+  Widget _buildTimelinePlaybackCanvas() {
+    final showChanges = widget.engine.timelineShowProgressChanges;
+    final events = widget.engine.buildOrderedTimelineEvents(
+      includeProgressChanges: showChanges,
+    );
+
+    final safeStep =
+        events.isEmpty ? 0 : _timelineStepIndex.clamp(0, events.length - 1);
+    final frame = _computeTimelineFrame(events, safeStep, showChanges);
+
+    final Map<String, Offset> nodePositions = {
+      for (final n in frame.nodes) n.id: Offset(n.x, n.y),
+    };
+
+    final Map<String, Rect> groupRects = {};
+    for (final group in frame.groups) {
+      double minX = double.infinity;
+      double minY = double.infinity;
+      double maxX = -double.infinity;
+      double maxY = -double.infinity;
+      bool hasAny = false;
+
+      for (final nId in group.nodeIds) {
+        final snap = frame.nodes.where((n) => n.id == nId).firstOrNull;
+        if (snap != null) {
+          hasAny = true;
+          final w = snap.isPrompt ? _promptWidth : _normalWidth;
+          final h = snap.isPrompt ? _promptHeight : _normalHeight;
+          minX = math.min(minX, snap.x);
+          minY = math.min(minY, snap.y);
+          maxX = math.max(maxX, snap.x + w);
+          maxY = math.max(maxY, snap.y + h);
+        }
+      }
+
+      if (hasAny) {
+        const padding = 20.0;
+        groupRects[group.id] = Rect.fromLTRB(
+          minX - padding,
+          minY - padding - 22.0,
+          maxX + padding,
+          maxY + padding,
+        );
+      }
+    }
+
+    return Stack(
+      children: [
+        // 1. 底层可缩放平移只读画布
+        InteractiveViewer(
+          transformationController: _transController,
+          boundaryMargin: const EdgeInsets.all(3000),
+          minScale: 0.1,
+          maxScale: 3.5,
+          constrained: false,
+          child: Container(
+            key: _canvasKey,
+            width: _canvasWidth,
+            height: _canvasHeight,
+            decoration: const BoxDecoration(
+              color: AppTheme.bgCanvas,
+            ),
+            child: CustomPaint(
+              painter: DotGridPainter(),
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  // 连线演化层
+                  ..._buildTimelineConnections(
+                    frame.connections,
+                    frame.nodes,
+                    nodePositions,
+                    groupRects,
+                  ),
+
+                  // 大框演化层
+                  for (final group in frame.groups)
+                    if (groupRects.containsKey(group.id))
+                      _buildTimelineGroupBox(
+                        group,
+                        groupRects[group.id]!,
+                        frame.nodes,
+                        showChanges,
+                      ),
+
+                  // 节点卡片演化层（支持增删改查动画与增减浮标）
+                  for (final snap in frame.nodes)
+                    _buildTimelineNodeCard(snap, showChanges),
+                ],
+              ),
+            ),
+          ),
+        ),
+
+        // 2. 顶部时间轴播放控制条
+        Positioned(
+          left: 0,
+          right: 0,
+          top: 0,
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+            decoration: const BoxDecoration(
+              color: AppTheme.surfaceWhite,
+              border: Border(
+                bottom: BorderSide(color: AppTheme.borderLight, width: 0.9),
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Color(0x0A0F172A),
+                  blurRadius: 6,
+                  offset: Offset(0, 2),
+                ),
+              ],
+            ),
+            child: events.isEmpty
+                ? const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 8),
+                    child: Center(
+                      child: Text(
+                        '暂无国策树演化记录',
+                        style: TextStyle(fontSize: 12, color: Colors.black45),
+                      ),
+                    ),
+                  )
+                : Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // 第一行：播放/暂停 + 进度滑块 + 倍速
+                      Row(
+                        children: [
+                          InkWell(
+                            onTap: () {
+                              if (_isTimelinePlaying) {
+                                _stopTimelinePlayback();
+                              } else {
+                                _startTimelinePlayback();
+                              }
+                            },
+                            borderRadius: BorderRadius.circular(20),
+                            child: Container(
+                              width: 32,
+                              height: 32,
+                              decoration: const BoxDecoration(
+                                color: AppTheme.primaryBlue,
+                                shape: BoxShape.circle,
+                              ),
+                              child: Icon(
+                                _isTimelinePlaying
+                                    ? Icons.pause_rounded
+                                    : Icons.play_arrow_rounded,
+                                color: Colors.white,
+                                size: 20,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: SliderTheme(
+                              data: SliderTheme.of(context).copyWith(
+                                trackHeight: 3.0,
+                                thumbShape: const RoundSliderThumbShape(
+                                  enabledThumbRadius: 6.5,
+                                ),
+                                overlayShape: const RoundSliderOverlayShape(
+                                  overlayRadius: 12,
+                                ),
+                              ),
+                              child: Slider(
+                                value: safeStep.toDouble(),
+                                min: 0,
+                                max: math.max(1, events.length - 1).toDouble(),
+                                divisions: events.length > 1
+                                    ? events.length - 1
+                                    : null,
+                                activeColor: AppTheme.primaryBlue,
+                                inactiveColor: AppTheme.borderLight,
+                                onChanged: events.length <= 1
+                                    ? null
+                                    : (val) {
+                                        _stopTimelinePlayback();
+                                        setState(() {
+                                          _timelineStepIndex = val.round();
+                                        });
+                                      },
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            '${safeStep + 1}/${events.length}',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.black54,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          InkWell(
+                            onTap: _cyclePlaybackSpeed,
+                            borderRadius: BorderRadius.circular(6),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 7,
+                                vertical: 3,
+                              ),
+                              decoration: BoxDecoration(
+                                color: AppTheme.bgCanvas,
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(color: AppTheme.borderLight),
+                              ),
+                              child: Text(
+                                '${_playbackSpeed.toInt()}x',
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w800,
+                                  color: AppTheme.deepNavy,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+
+                      // 第二行：当前事件时间戳与动作标签 + 「显示增减变化」选项开关
+                      Row(
+                        children: [
+                          if (frame.currentEvent != null)
+                            Expanded(
+                              child: Row(
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 6,
+                                      vertical: 2,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: AppTheme.subtleFill,
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Text(
+                                      _describeTimelineEvent(
+                                          frame.currentEvent!),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w700,
+                                        color: AppTheme.primaryBlue,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Flexible(
+                                    child: Text(
+                                      _formatEventTimestamp(
+                                          frame.currentEvent!.time),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontSize: 10.5,
+                                        color: Colors.black45,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            )
+                          else
+                            const Spacer(),
+                          const SizedBox(width: 8),
+                          // 选项开关：是否在时间轴中看到增加减少的变化
+                          InkWell(
+                            onTap: () {
+                              final currentEvtId = frame.currentEvent?.id;
+                              final nextShow = !showChanges;
+                              widget.engine
+                                  .setTimelineShowProgressChanges(nextShow);
+
+                              final nextEvents =
+                                  widget.engine.buildOrderedTimelineEvents(
+                                includeProgressChanges: nextShow,
+                              );
+                              int targetIdx = 0;
+                              if (currentEvtId != null &&
+                                  nextEvents.isNotEmpty) {
+                                final exactIdx = nextEvents
+                                    .indexWhere((e) => e.id == currentEvtId);
+                                if (exactIdx != -1) {
+                                  targetIdx = exactIdx;
+                                } else if (frame.currentEvent != null) {
+                                  final t = frame.currentEvent!.time;
+                                  final found = nextEvents
+                                      .lastIndexWhere((e) => !e.time.isAfter(t));
+                                  targetIdx = found == -1 ? 0 : found;
+                                }
+                              }
+                              setState(() {
+                                _timelineStepIndex = targetIdx;
+                              });
+                            },
+                            borderRadius: BorderRadius.circular(6),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 3.5,
+                              ),
+                              decoration: BoxDecoration(
+                                color: showChanges
+                                    ? AppTheme.primaryBlue
+                                        .withValues(alpha: 0.12)
+                                    : AppTheme.bgCanvas,
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(
+                                  color: showChanges
+                                      ? AppTheme.primaryBlue
+                                      : AppTheme.borderLight,
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    showChanges
+                                        ? Icons.check_box_rounded
+                                        : Icons.check_box_outline_blank_rounded,
+                                    size: 14,
+                                    color: showChanges
+                                        ? AppTheme.primaryBlue
+                                        : Colors.black45,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    '显示增减变化',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w700,
+                                      color: showChanges
+                                          ? AppTheme.primaryBlue
+                                          : Colors.black54,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTimelineGroupBox(
+    _TimelineGroupSnapshot group,
+    Rect rect,
+    List<_TimelineNodeSnapshot> frameNodes,
+    bool showChanges,
+  ) {
+    final isRemoved = group.activeEffect == 'removed';
+    final isAdded = group.activeEffect == 'added';
+
+    final groupNodes = frameNodes
+        .where((n) => group.nodeIds.contains(n.id) && !n.isPrompt)
+        .toList();
+
+    final displayMode = widget.engine.displayMode;
+    double avgScore = 0.0;
+    int totalInc = 0;
+    int totalDec = 0;
+    double avgConsecutive = 0.0;
+
+    if (groupNodes.isNotEmpty) {
+      avgScore = groupNodes.fold<double>(0.0, (s, n) => s + n.score) /
+          groupNodes.length;
+      int sumCons = 0;
+      for (final n in groupNodes) {
+        totalInc += n.increaseCount;
+        totalDec += n.decreaseCount;
+        sumCons += n.consecutiveCount;
+      }
+      avgConsecutive = sumCons / groupNodes.length;
+    }
+
+    final scoreColor = ProgressColorHelper.getScoreColor(avgScore);
+    final scoreBg = ProgressColorHelper.getScoreBgColor(avgScore);
+    final incTextColor = ProgressColorHelper.getIncreaseColor(totalInc);
+    final incBgColor = ProgressColorHelper.getIncreaseBgColor(totalInc);
+    final consTextColor =
+        ProgressColorHelper.getIncreaseColor(avgConsecutive.round());
+    final consBgColor =
+        ProgressColorHelper.getIncreaseBgColor(avgConsecutive.round());
+
+    return Positioned(
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
+      child: AnimatedOpacity(
+        duration: const Duration(milliseconds: 240),
+        opacity: isRemoved ? 0.35 : 1.0,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 240),
+          decoration: BoxDecoration(
+            color: isRemoved
+                ? Colors.red.withValues(alpha: 0.06)
+                : isAdded
+                    ? AppTheme.primaryBlue.withValues(alpha: 0.1)
+                    : AppTheme.primaryBlue.withValues(alpha: 0.035),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: isRemoved
+                  ? Colors.redAccent
+                  : isAdded
+                      ? AppTheme.primaryBlue
+                      : AppTheme.skyBlue.withValues(alpha: 0.55),
+              width: (isAdded || isRemoved) ? 2.2 : 1.5,
+            ),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.only(left: 12, right: 10, top: 8),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  group.title,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    color: isRemoved ? Colors.red.shade700 : AppTheme.deepNavy,
+                  ),
+                ),
+                if (showChanges && !isRemoved) ...[
+                  if (displayMode == 1)
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: incBgColor,
+                            borderRadius: BorderRadius.circular(5),
+                          ),
+                          child: Text(
+                            '+$totalInc',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800,
+                              color: incTextColor,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.red.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(5),
+                          ),
+                          child: Text(
+                            '-$totalDec',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800,
+                              color: Colors.red.shade700,
+                            ),
+                          ),
+                        ),
+                      ],
+                    )
+                  else if (displayMode == 2) ...[
+                    if (avgConsecutive > 0)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: consBgColor,
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                            color: consTextColor.withValues(alpha: 0.35),
+                          ),
+                        ),
+                        child: Text(
+                          '均连 ${avgConsecutive.toStringAsFixed(1)}次',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                            color: consTextColor,
+                          ),
+                        ),
+                      ),
+                  ] else
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 7, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: scoreBg,
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(
+                          color: scoreColor.withValues(alpha: 0.35),
+                        ),
+                      ),
+                      child: Text(
+                        '均 ${avgScore.toStringAsFixed(1)}分',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                          color: scoreColor,
+                        ),
+                      ),
+                    ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTimelineNodeCard(
+    _TimelineNodeSnapshot snap,
+    bool showChanges,
+  ) {
+    final effect = snap.activeEffect;
+    final isCreated = effect == 'created';
+    final isUpdated = effect == 'updated';
+    final isDeleted = effect == 'deleted';
+    final isInc = effect == 'inc';
+    final isDec = effect == 'dec';
+    final isSkip = effect == 'skip';
+
+    final displayMode = widget.engine.displayMode;
+    final scoreColor = ProgressColorHelper.getScoreColor(snap.score);
+    final scoreBg = ProgressColorHelper.getScoreBgColor(snap.score);
+    final incTextColor =
+        ProgressColorHelper.getIncreaseColor(snap.increaseCount);
+    final incBgColor =
+        ProgressColorHelper.getIncreaseBgColor(snap.increaseCount);
+    final progColor = ProgressColorHelper.getColor(snap.progress);
+    final progBg = ProgressColorHelper.getBgColor(snap.progress);
+    final consColor =
+        ProgressColorHelper.getIncreaseColor(snap.consecutiveCount);
+    final consBg =
+        ProgressColorHelper.getIncreaseBgColor(snap.consecutiveCount);
+
+    final Color baseBorderColor;
+    final Color baseCardBg;
+
+    if (isDeleted) {
+      baseBorderColor = Colors.redAccent;
+      baseCardBg = const Color(0xFFFEF2F2);
+    } else if (isCreated || isUpdated) {
+      baseBorderColor = AppTheme.primaryBlue;
+      baseCardBg = AppTheme.subtleFill;
+    } else if (isInc) {
+      baseBorderColor = Colors.green.shade600;
+      baseCardBg = const Color(0xFFF2FBF4);
+    } else if (isDec) {
+      baseBorderColor = Colors.red.shade600;
+      baseCardBg = const Color(0xFFFDF3F3);
+    } else if (isSkip) {
+      baseBorderColor = Colors.blueGrey.shade500;
+      baseCardBg = const Color(0xFFF1F5F9);
+    } else if (snap.isPrompt) {
+      baseBorderColor = const Color(0xFFCBD5E1);
+      baseCardBg = AppTheme.surfaceWhite;
+    } else if (showChanges) {
+      final activeBorder = switch (displayMode) {
+        1 => progColor,
+        2 => consColor,
+        _ => scoreColor,
+      };
+      final activeTint = switch (displayMode) {
+        1 => progBg,
+        2 => consBg,
+        _ => scoreBg,
+      };
+      baseBorderColor = activeBorder.withValues(alpha: 0.55);
+      baseCardBg = Color.alphaBlend(
+        activeTint.withValues(alpha: 0.55),
+        AppTheme.surfaceWhite,
+      );
+    } else {
+      baseBorderColor = AppTheme.skyBlue.withValues(alpha: 0.65);
+      baseCardBg = AppTheme.surfaceWhite;
+    }
+
+    // 浮标提示（+1 / -1 / 跳过 / 新增 / 修订 / 删除）
+    String? badgeLabel;
+    Color? badgeColor;
+    if (isCreated) {
+      badgeLabel = '新增';
+      badgeColor = AppTheme.primaryBlue;
+    } else if (isUpdated) {
+      badgeLabel = '修订';
+      badgeColor = AppTheme.primaryBlue;
+    } else if (isDeleted) {
+      badgeLabel = '已删除';
+      badgeColor = Colors.redAccent;
+    } else if (isInc) {
+      badgeLabel = '+1';
+      badgeColor = Colors.green.shade700;
+    } else if (isDec) {
+      badgeLabel = '-1';
+      badgeColor = Colors.red.shade700;
+    } else if (isSkip) {
+      badgeLabel = '跳过';
+      badgeColor = Colors.blueGrey.shade700;
+    }
+
+    final double w = snap.isPrompt ? _promptWidth : _normalWidth;
+    final double h = snap.isPrompt ? _promptHeight : _normalHeight;
+
+    return Positioned(
+      left: snap.x,
+      top: snap.y,
+      child: TweenAnimationBuilder<double>(
+        key: ValueKey('tl_${snap.id}_${effect ?? "steady"}'),
+        tween: Tween<double>(
+          begin: isCreated ? 0.72 : (isDeleted ? 1.0 : 0.94),
+          end: isDeleted ? 0.86 : 1.0,
+        ),
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutBack,
+        builder: (context, scale, child) {
+          return Transform.scale(
+            scale: scale,
+            child: AnimatedOpacity(
+              duration: const Duration(milliseconds: 240),
+              opacity: isDeleted ? 0.42 : 1.0,
+              child: child,
+            ),
+          );
+        },
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 220),
+              width: w,
+              height: h,
+              padding: EdgeInsets.symmetric(
+                horizontal: 10,
+                vertical: snap.isPrompt ? 8 : 8,
+              ),
+              decoration: BoxDecoration(
+                color: baseCardBg,
+                borderRadius: BorderRadius.circular(snap.isPrompt ? 8 : 10),
+                border: Border.all(
+                  color: baseBorderColor,
+                  width: effect != null ? 2.0 : 1.4,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: effect != null
+                        ? baseBorderColor.withValues(alpha: 0.25)
+                        : Colors.black.withValues(alpha: 0.05),
+                    blurRadius: effect != null ? 8 : 4,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: snap.isPrompt
+                  ? Center(
+                      child: Text(
+                        snap.content,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w500,
+                          color: Colors.black87,
+                          height: 1.25,
+                        ),
+                      ),
+                    )
+                  : Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                snap.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w800,
+                                  color: AppTheme.deepNavy,
+                                ),
+                              ),
+                            ),
+                            if (showChanges) ...[
+                              if (displayMode == 1)
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 5, vertical: 1.5),
+                                      decoration: BoxDecoration(
+                                        color: incBgColor,
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                      child: Text(
+                                        '+${snap.increaseCount}',
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w900,
+                                          color: incTextColor,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 3),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 5, vertical: 1.5),
+                                      decoration: BoxDecoration(
+                                        color:
+                                            Colors.red.withValues(alpha: 0.12),
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                      child: Text(
+                                        '-${snap.decreaseCount}',
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w900,
+                                          color: Colors.red.shade700,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                )
+                              else if (displayMode == 2) ...[
+                                if (snap.consecutiveCount > 0)
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 6, vertical: 1.5),
+                                    decoration: BoxDecoration(
+                                      color: consBg,
+                                      borderRadius: BorderRadius.circular(4),
+                                      border: Border.all(
+                                        color:
+                                            consColor.withValues(alpha: 0.3),
+                                        width: 0.8,
+                                      ),
+                                    ),
+                                    child: Text(
+                                      '连${snap.consecutiveCount}次',
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w900,
+                                        color: consColor,
+                                      ),
+                                    ),
+                                  ),
+                              ] else
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 6, vertical: 1.5),
+                                  decoration: BoxDecoration(
+                                    color: scoreBg,
+                                    borderRadius: BorderRadius.circular(4),
+                                    border: Border.all(
+                                      color: scoreColor.withValues(alpha: 0.3),
+                                      width: 0.8,
+                                    ),
+                                  ),
+                                  child: Text(
+                                    '${snap.score.toStringAsFixed(1)}分',
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w900,
+                                      color: scoreColor,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          snap.content.isEmpty ? '（无详细内容）' : snap.content,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: Colors.black54,
+                            height: 1.25,
+                          ),
+                        ),
+                      ],
+                    ),
+            ),
+
+            // 瞬时状态浮标胶囊
+            if (badgeLabel != null && badgeColor != null)
+              Positioned(
+                right: -4,
+                top: -10,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: badgeColor,
+                    borderRadius: BorderRadius.circular(6),
+                    boxShadow: [
+                      BoxShadow(
+                        color: badgeColor.withValues(alpha: 0.3),
+                        blurRadius: 4,
+                        offset: const Offset(0, 1),
+                      ),
+                    ],
+                  ),
+                  child: Text(
+                    badgeLabel,
+                    style: const TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w900,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  List<Widget> _buildTimelineConnections(
+    List<_TimelineConnectionSnapshot> conns,
+    List<_TimelineNodeSnapshot> frameNodes,
+    Map<String, Offset> nodePositions,
+    Map<String, Rect> groupRects,
+  ) {
+    final widgets = <Widget>[];
+
+    for (final conn in conns) {
+      final fromNode =
+          frameNodes.where((n) => n.id == conn.fromId).firstOrNull;
+      final toNode = frameNodes.where((n) => n.id == conn.toId).firstOrNull;
+
+      Offset? fromCenter;
+      Offset? toCenter;
+
+      if (groupRects.containsKey(conn.fromId)) {
+        fromCenter = groupRects[conn.fromId]!.center;
+      } else if (nodePositions.containsKey(conn.fromId)) {
+        final pos = nodePositions[conn.fromId]!;
+        final w = fromNode?.isPrompt == true ? _promptWidth : _normalWidth;
+        final h = fromNode?.isPrompt == true ? _promptHeight : _normalHeight;
+        fromCenter = Offset(pos.dx + w / 2, pos.dy + h / 2);
+      }
+
+      if (groupRects.containsKey(conn.toId)) {
+        toCenter = groupRects[conn.toId]!.center;
+      } else if (nodePositions.containsKey(conn.toId)) {
+        final pos = nodePositions[conn.toId]!;
+        final w = toNode?.isPrompt == true ? _promptWidth : _normalWidth;
+        final h = toNode?.isPrompt == true ? _promptHeight : _normalHeight;
+        toCenter = Offset(pos.dx + w / 2, pos.dy + h / 2);
+      }
+
+      if (fromCenter != null && toCenter != null) {
+        final isAdded = conn.activeEffect == 'added';
+        final isRemoved = conn.activeEffect == 'removed';
+
+        widgets.add(
+          CustomPaint(
+            size: const Size(_canvasWidth, _canvasHeight),
+            painter: BezierConnectionPainter(
+              start: fromCenter,
+              end: toCenter,
+              isSelected: isAdded,
+              isRemoved: isRemoved,
+            ),
+          ),
+        );
+      }
+    }
+
+    return widgets;
+  }
+
+  // ==========================================
+  // 常规树画布构建组件
+  // ==========================================
+
   Widget _buildGroupBoundingBox(
     FocusGroupModel group,
     Rect rect,
     Map<String, Offset> positions,
   ) {
-    final isCountMode = widget.engine.displayMode == 1;
+    final displayMode = widget.engine.displayMode;
     final groupNodes = widget.engine.nodes
         .where((n) => group.nodeIds.contains(n.id) && !n.isPrompt)
         .toList();
@@ -291,6 +1605,7 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
     double avgScore = 0.0;
     int totalInc = 0;
     int totalDec = 0;
+    double avgConsecutive = 0.0;
 
     if (groupNodes.isNotEmpty) {
       final sumScore = groupNodes.fold<double>(
@@ -298,16 +1613,23 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
         (sum, n) => sum + widget.engine.getNodeScore(n.id).score,
       );
       avgScore = sumScore / groupNodes.length;
+
+      int sumConsecutive = 0;
       for (final n in groupNodes) {
         totalInc += n.increaseCount;
         totalDec += n.decreaseCount;
+        sumConsecutive += widget.engine.getNodeConsecutiveCount(n.id);
       }
+      avgConsecutive = sumConsecutive / groupNodes.length;
     }
 
     final scoreColor = ProgressColorHelper.getScoreColor(avgScore);
     final scoreBg = ProgressColorHelper.getScoreBgColor(avgScore);
     final incTextColor = ProgressColorHelper.getIncreaseColor(totalInc);
     final incBgColor = ProgressColorHelper.getIncreaseBgColor(totalInc);
+    final avgConsInt = avgConsecutive.round();
+    final consTextColor = ProgressColorHelper.getIncreaseColor(avgConsInt);
+    final consBgColor = ProgressColorHelper.getIncreaseBgColor(avgConsInt);
 
     final isGroupDragging = _draggingGroupId == group.id;
     final isConnectSelected = group.id == _connectStartId;
@@ -392,7 +1714,7 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (isCountMode) ...[
+                    if (displayMode == 1) ...[
                       Container(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 6, vertical: 2),
@@ -426,7 +1748,31 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
                           ),
                         ),
                       ),
-                    ] else
+                      const SizedBox(width: 6),
+                    ] else if (displayMode == 2) ...[
+                      if (avgConsecutive > 0) ...[
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 7, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: consBgColor,
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(
+                              color: consTextColor.withValues(alpha: 0.35),
+                            ),
+                          ),
+                          child: Text(
+                            '均连 ${avgConsecutive.toStringAsFixed(1)}次',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800,
+                              color: consTextColor,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                      ],
+                    ] else ...[
                       Container(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 7, vertical: 2),
@@ -446,7 +1792,8 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
                           ),
                         ),
                       ),
-                    const SizedBox(width: 6),
+                      const SizedBox(width: 6),
+                    ],
                     GestureDetector(
                       onTap: () => _confirmDeleteGroup(group),
                       child: Container(
@@ -540,18 +1887,32 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
     bool isHighlightedGroup,
     bool isDragging,
   ) {
-    final isCountMode = widget.engine.displayMode == 1;
+    final displayMode = widget.engine.displayMode;
     final scoreRes = widget.engine.getNodeScore(node.id);
     final scoreColor = ProgressColorHelper.getScoreColor(scoreRes.score);
     final scoreBg = ProgressColorHelper.getScoreBgColor(scoreRes.score);
 
-    final incTextColor = ProgressColorHelper.getIncreaseColor(node.increaseCount);
-    final incBgColor = ProgressColorHelper.getIncreaseBgColor(node.increaseCount);
+    final incTextColor =
+        ProgressColorHelper.getIncreaseColor(node.increaseCount);
+    final incBgColor =
+        ProgressColorHelper.getIncreaseBgColor(node.increaseCount);
     final progColor = ProgressColorHelper.getColor(node.progress);
     final progBg = ProgressColorHelper.getBgColor(node.progress);
 
-    final activeBorderColor = isCountMode ? progColor : scoreColor;
-    final activeTintBg = isCountMode ? progBg : scoreBg;
+    final consecutiveCount = widget.engine.getNodeConsecutiveCount(node.id);
+    final consColor = ProgressColorHelper.getIncreaseColor(consecutiveCount);
+    final consBg = ProgressColorHelper.getIncreaseBgColor(consecutiveCount);
+
+    final activeBorderColor = switch (displayMode) {
+      1 => progColor,
+      2 => consColor,
+      _ => scoreColor,
+    };
+    final activeTintBg = switch (displayMode) {
+      1 => progBg,
+      2 => consBg,
+      _ => scoreBg,
+    };
 
     final solidBgColor = Color.alphaBlend(
       activeTintBg.withValues(alpha: 0.55),
@@ -560,7 +1921,6 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
     final isHighlighted = isSelectedSingle || isHighlightedGroup;
     final isActiveToday = widget.engine.isNodeActiveToday(node);
 
-    // 已归档节点在树画布中半透明显示 (0.35)，而非删除
     final double targetOpacity = node.isArchived
         ? (isHighlighted || isDragging ? 0.65 : 0.35)
         : ((isActiveToday || isHighlighted || isDragging) ? 1.0 : 0.45);
@@ -615,7 +1975,7 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
                         ),
                       ),
                     ),
-                    if (isCountMode)
+                    if (displayMode == 1)
                       Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
@@ -654,7 +2014,29 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
                           ),
                         ],
                       )
-                    else
+                    else if (displayMode == 2) ...[
+                      if (consecutiveCount > 0)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 1.5),
+                          decoration: BoxDecoration(
+                            color: consBg,
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(
+                              color: consColor.withValues(alpha: 0.3),
+                              width: 0.8,
+                            ),
+                          ),
+                          child: Text(
+                            '连$consecutiveCount次',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w900,
+                              color: consColor,
+                            ),
+                          ),
+                        ),
+                    ] else
                       Container(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 6, vertical: 1.5),
@@ -700,7 +2082,6 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
     );
   }
 
-  /// 提示块保持清晰、不透明的中性白底卡片样式
   Widget _buildPromptNodeCard(
     FocusNodeModel node,
     bool isSelectedSingle,
@@ -842,21 +2223,25 @@ class BezierConnectionPainter extends CustomPainter {
   final Offset end;
   final bool isSelected;
   final bool isFaded;
+  final bool isRemoved;
 
   BezierConnectionPainter({
     required this.start,
     required this.end,
     required this.isSelected,
     this.isFaded = false,
+    this.isRemoved = false,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = isSelected
-          ? AppTheme.primaryBlue
-          : AppTheme.primaryBlue.withValues(alpha: isFaded ? 0.15 : 0.35)
-      ..strokeWidth = isSelected ? 3.0 : 1.5
+      ..color = isRemoved
+          ? Colors.redAccent.withValues(alpha: 0.7)
+          : isSelected
+              ? AppTheme.primaryBlue
+              : AppTheme.primaryBlue.withValues(alpha: isFaded ? 0.15 : 0.35)
+      ..strokeWidth = (isSelected || isRemoved) ? 3.0 : 1.5
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
 
@@ -884,7 +2269,8 @@ class BezierConnectionPainter extends CustomPainter {
     return oldDelegate.start != start ||
         oldDelegate.end != end ||
         oldDelegate.isSelected != isSelected ||
-        oldDelegate.isFaded != isFaded;
+        oldDelegate.isFaded != isFaded ||
+        oldDelegate.isRemoved != isRemoved;
   }
 }
 

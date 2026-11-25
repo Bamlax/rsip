@@ -312,7 +312,7 @@ class ProgressRecord {
   final Map<String, double>? attributeDeltas;
   final int? revision;
   final bool isEdit;
-  final bool isSkip; // 新增：是否为跳过记录
+  final bool isSkip;
   final String? oldTitle;
   final String? newTitle;
   final String? oldContent;
@@ -388,7 +388,6 @@ class ProgressRecord {
             ? DateTime.tryParse(json['time'] as String) ?? DateTime.now()
             : DateTime.now(),
       );
-      
 }
 
 /// 快速归档分类方案
@@ -418,4 +417,100 @@ class ArchivePresetModel {
                 .toSet() ??
             {},
       );
+}
+
+/// 国策树时间轴演化事件类型
+enum TimelineEventType {
+  nodeCreated,
+  nodeUpdated,
+  nodeDeleted,
+  connectionAdded,
+  connectionRemoved,
+  groupAdded,
+  groupRemoved,
+  progressChanged,
+}
+
+/// 国策树时间轴演化事件记录
+class TimelineEventModel {
+  final String id;
+  final TimelineEventType type;
+  final DateTime time;
+  final String targetId;
+  final String? secondaryId;
+  final String? title;
+  final String? content;
+  final bool isPrompt;
+  final bool isArchived;
+  final double? x;
+  final double? y;
+  final List<String>? nodeIds;
+  final int delta;
+  final bool isSkip;
+  final String? note;
+
+  TimelineEventModel({
+    required this.id,
+    required this.type,
+    required this.time,
+    required this.targetId,
+    this.secondaryId,
+    this.title,
+    this.content,
+    this.isPrompt = false,
+    this.isArchived = false,
+    this.x,
+    this.y,
+    this.nodeIds,
+    this.delta = 0,
+    this.isSkip = false,
+    this.note,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'type': type.name,
+        'time': time.toIso8601String(),
+        'targetId': targetId,
+        'secondaryId': secondaryId,
+        'title': title,
+        'content': content,
+        'isPrompt': isPrompt,
+        'isArchived': isArchived,
+        'x': x,
+        'y': y,
+        'nodeIds': nodeIds,
+        'delta': delta,
+        'isSkip': isSkip,
+        'note': note,
+      };
+
+  factory TimelineEventModel.fromJson(Map<String, dynamic> json) {
+    final typeName = json['type'] as String? ?? 'nodeCreated';
+    final parsedType = TimelineEventType.values.firstWhere(
+      (e) => e.name == typeName,
+      orElse: () => TimelineEventType.nodeCreated,
+    );
+    return TimelineEventModel(
+      id: json['id'] as String,
+      type: parsedType,
+      time: json['time'] != null
+          ? DateTime.tryParse(json['time'] as String) ?? DateTime.now()
+          : DateTime.now(),
+      targetId: json['targetId'] as String? ?? '',
+      secondaryId: json['secondaryId'] as String?,
+      title: json['title'] as String?,
+      content: json['content'] as String?,
+      isPrompt: json['isPrompt'] as bool? ?? false,
+      isArchived: json['isArchived'] as bool? ?? false,
+      x: (json['x'] as num?)?.toDouble(),
+      y: (json['y'] as num?)?.toDouble(),
+      nodeIds: (json['nodeIds'] as List<dynamic>?)
+          ?.map((e) => e.toString())
+          .toList(),
+      delta: json['delta'] as int? ?? 0,
+      isSkip: json['isSkip'] as bool? ?? false,
+      note: json['note'] as String?,
+    );
+  }
 }

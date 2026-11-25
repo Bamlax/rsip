@@ -70,6 +70,9 @@ class _MainScreenState extends State<MainScreen> {
     if (widget.engine.isArchiveMode) {
       widget.engine.cancelArchiveMode();
     }
+    if (widget.engine.isTimelineMode) {
+      widget.engine.toggleTimelineMode(false);
+    }
     setState(() {
       _currentViewIndex = idx;
       if (idx != 1) _isConnectMode = false;
@@ -87,12 +90,14 @@ class _MainScreenState extends State<MainScreen> {
         final selectedConnection = widget.engine.selectedConnection;
         final inGroupMode = widget.engine.isGroupSelectMode;
         final inArchiveMode = widget.engine.isArchiveMode;
+        final inTimelineMode = widget.engine.isTimelineMode;
 
         final appBar = _buildAppBar(
           selectedNode: selectedNode,
           selectedConnection: selectedConnection,
           inGroupMode: inGroupMode,
           inArchiveMode: inArchiveMode,
+          inTimelineMode: inTimelineMode,
           useSideNav: useSideNav,
         );
 
@@ -112,7 +117,8 @@ class _MainScreenState extends State<MainScreen> {
 
         final fab = ((_currentViewIndex == 0 || _currentViewIndex == 1) &&
                 !inArchiveMode &&
-                !inGroupMode)
+                !inGroupMode &&
+                !inTimelineMode)
             ? FloatingActionButton(
                 backgroundColor: AppTheme.primaryBlue,
                 foregroundColor: Colors.white,
@@ -272,10 +278,9 @@ class _MainScreenState extends State<MainScreen> {
     required FocusConnection? selectedConnection,
     required bool inGroupMode,
     required bool inArchiveMode,
+    required bool inTimelineMode,
     required bool useSideNav,
   }) {
-    final activePreset = widget.engine.selectedArchivePreset;
-
     return AppBar(
       backgroundColor: AppTheme.surfaceWhite,
       elevation: 0,
@@ -306,7 +311,27 @@ class _MainScreenState extends State<MainScreen> {
               ),
             )
           : null,
-      title: inGroupMode
+      title: inTimelineMode
+          ? const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.timeline_rounded,
+                  size: 20,
+                  color: AppTheme.primaryBlue,
+                ),
+                SizedBox(width: 8),
+                Text(
+                  '时间轴回放',
+                  style: TextStyle(
+                    color: AppTheme.deepNavy,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            )
+          : inGroupMode
           ? Row(
               children: [
                 const Icon(
@@ -327,10 +352,7 @@ class _MainScreenState extends State<MainScreen> {
             )
           : inArchiveMode
           ? Text(
-              activePreset != null
-                  ? '${activePreset.name} (${widget.engine.archiveSelectedIds.length})'
-                  : '归档管理 (${widget.engine.archiveSelectedIds.length})',
-              overflow: TextOverflow.ellipsis,
+              '归档管理 (${widget.engine.archiveSelectedIds.length})',
               style: const TextStyle(
                 color: AppTheme.deepNavy,
                 fontSize: 16,
@@ -373,6 +395,7 @@ class _MainScreenState extends State<MainScreen> {
         selectedConnection,
         inGroupMode,
         inArchiveMode,
+        inTimelineMode,
       ),
     );
   }
@@ -392,7 +415,7 @@ class _MainScreenState extends State<MainScreen> {
       );
     }
 
-    final isCountMode = widget.engine.displayMode == 1;
+    final displayMode = widget.engine.displayMode;
     final scoreRes = widget.engine.getNodeScore(node.id);
     final scoreColor = ProgressColorHelper.getScoreColor(scoreRes.score);
     final scoreBgColor = ProgressColorHelper.getScoreBgColor(scoreRes.score);
@@ -402,10 +425,16 @@ class _MainScreenState extends State<MainScreen> {
     final incBgColor =
         ProgressColorHelper.getIncreaseBgColor(node.increaseCount);
 
+    final consecutiveCount = widget.engine.getNodeConsecutiveCount(node.id);
+    final consTextColor =
+        ProgressColorHelper.getIncreaseColor(consecutiveCount);
+    final consBgColor =
+        ProgressColorHelper.getIncreaseBgColor(consecutiveCount);
+
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (isCountMode) ...[
+        if (displayMode == 1) ...[
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
             decoration: BoxDecoration(
@@ -437,7 +466,30 @@ class _MainScreenState extends State<MainScreen> {
               ),
             ),
           ),
-        ] else
+          const SizedBox(width: 8),
+        ] else if (displayMode == 2) ...[
+          if (consecutiveCount > 0) ...[
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+              decoration: BoxDecoration(
+                color: consBgColor,
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(
+                  color: consTextColor.withValues(alpha: 0.35),
+                ),
+              ),
+              child: Text(
+                '连续 $consecutiveCount 次',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w900,
+                  color: consTextColor,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+          ],
+        ] else ...[
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
             decoration: BoxDecoration(
@@ -456,7 +508,8 @@ class _MainScreenState extends State<MainScreen> {
               ),
             ),
           ),
-        const SizedBox(width: 8),
+          const SizedBox(width: 8),
+        ],
         Flexible(
           child: Text(
             node.title,
@@ -472,26 +525,67 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
+  Widget _buildTimelineToggleSwitch(bool active) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+      child: InkWell(
+        onTap: () {
+          setState(() => _isConnectMode = false);
+          widget.engine.toggleTimelineMode(!active);
+        },
+        borderRadius: BorderRadius.circular(20),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(
+            color: active ? AppTheme.primaryBlue : AppTheme.bgCanvas,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: active ? AppTheme.primaryBlue : AppTheme.borderLight,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.timeline_rounded,
+                size: 15,
+                color: active ? Colors.white : AppTheme.deepNavy,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                '时间轴',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: active ? Colors.white : AppTheme.deepNavy,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   List<Widget> _buildAppBarActions(
     FocusNodeModel? selectedNode,
     FocusConnection? selectedConnection,
     bool inGroupMode,
     bool inArchiveMode,
+    bool inTimelineMode,
   ) {
-    // 1. 归档模式：支持 + 保存为分类、选中分类时重命名、以及右侧完成
-    if (inArchiveMode) {
-      final activePreset = widget.engine.selectedArchivePreset;
+    // 0. 树界面时间轴模式开启态：顶部保留开启状态的时间轴开关以便一键关闭
+    if (_currentViewIndex == 1 && inTimelineMode) {
       return [
-        if (activePreset != null)
-          IconButton(
-            icon: const Icon(
-              Icons.edit_outlined,
-              size: 20,
-              color: AppTheme.deepNavy,
-            ),
-            tooltip: '重命名当前分类',
-            onPressed: () => _openRenameArchivePresetDialog(activePreset),
-          ),
+        _buildTimelineToggleSwitch(true),
+        const SizedBox(width: 8),
+      ];
+    }
+
+    // 1. 归档模式
+    if (inArchiveMode) {
+      return [
         IconButton(
           icon: const Icon(
             Icons.add_rounded,
@@ -609,9 +703,10 @@ class _MainScreenState extends State<MainScreen> {
       ];
     }
 
-    // 5. 树界面常规态
+    // 5. 树界面常规态：顶部出现时间轴开关 + 框选 + 连线
     if (_currentViewIndex == 1) {
       return [
+        _buildTimelineToggleSwitch(false),
         IconButton(
           icon: const Icon(
             Icons.dashboard_customize_outlined,
@@ -685,7 +780,6 @@ class _MainScreenState extends State<MainScreen> {
     return const [];
   }
 
-  /// 弹窗：保存当前归档配置为新的命名分类
   void _openSaveArchivePresetDialog() {
     final nameController = TextEditingController();
 
@@ -742,70 +836,6 @@ class _MainScreenState extends State<MainScreen> {
               final name = nameController.text.trim();
               if (name.isEmpty) return;
               widget.engine.addArchivePreset(name);
-              Navigator.pop(ctx);
-            },
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// 弹窗：修改当前选中分类的名称
-  void _openRenameArchivePresetDialog(ArchivePresetModel preset) {
-    final nameController = TextEditingController(text: preset.name);
-
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppTheme.surfaceWhite,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        title: const Text(
-          '修改分类名称',
-          style: TextStyle(
-            fontSize: 17,
-            fontWeight: FontWeight.w800,
-            color: AppTheme.deepNavy,
-          ),
-        ),
-        content: TextField(
-          controller: nameController,
-          autofocus: true,
-          decoration: InputDecoration(
-            labelText: '分类名称',
-            labelStyle: const TextStyle(fontSize: 13),
-            filled: true,
-            fillColor: AppTheme.bgCanvas,
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: BorderSide.none,
-            ),
-          ),
-          onSubmitted: (val) {
-            final name = val.trim();
-            if (name.isEmpty) return;
-            widget.engine.renameArchivePreset(preset.id, name);
-            Navigator.pop(ctx);
-          },
-        ),
-        actions: [
-          TextButton(
-            child: const Text('取消', style: TextStyle(color: Colors.black45)),
-            onPressed: () => Navigator.pop(ctx),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppTheme.primaryBlue,
-              foregroundColor: Colors.white,
-              elevation: 0,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-            child: const Text('保存'),
-            onPressed: () {
-              final name = nameController.text.trim();
-              if (name.isEmpty) return;
-              widget.engine.renameArchivePreset(preset.id, name);
               Navigator.pop(ctx);
             },
           ),
