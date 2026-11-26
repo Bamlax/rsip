@@ -36,11 +36,15 @@ class VersionHistoryConfig {
 
   static const List<VersionRelease> releases = [
       VersionRelease(
-      version: '0.11.1',
+      version: '0.12.0',
       releaseDate: '2026-11-26',
       changeLogs: [
-        '新增：时间轴功能',
-        '新增：显示连续天数功能',
+        '新增：删除的多选功能',
+        "新增：长按空白多选功能",
+        "新增：帧前进功能",
+        '优化：提示节点样式',
+        '优化：编辑按钮位置',
+        "修复：连线无法删除的bug"
       ],
     ),
       VersionRelease(
