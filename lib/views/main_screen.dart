@@ -67,6 +67,7 @@ class _MainScreenState extends State<MainScreen> {
     widget.engine.selectNode(null);
     widget.engine.selectConnection(null);
     widget.engine.cancelGroupSelectMode();
+    widget.engine.clearMultiSelection();
     if (widget.engine.isArchiveMode) {
       widget.engine.cancelArchiveMode();
     }
@@ -89,6 +90,7 @@ class _MainScreenState extends State<MainScreen> {
         final selectedNode = widget.engine.selectedNode;
         final selectedConnection = widget.engine.selectedConnection;
         final inGroupMode = widget.engine.isGroupSelectMode;
+        final inMultiSelectMode = widget.engine.isMultiSelectMode;
         final inArchiveMode = widget.engine.isArchiveMode;
         final inTimelineMode = widget.engine.isTimelineMode;
 
@@ -96,6 +98,7 @@ class _MainScreenState extends State<MainScreen> {
           selectedNode: selectedNode,
           selectedConnection: selectedConnection,
           inGroupMode: inGroupMode,
+          inMultiSelectMode: inMultiSelectMode,
           inArchiveMode: inArchiveMode,
           inTimelineMode: inTimelineMode,
           useSideNav: useSideNav,
@@ -118,6 +121,7 @@ class _MainScreenState extends State<MainScreen> {
         final fab = ((_currentViewIndex == 0 || _currentViewIndex == 1) &&
                 !inArchiveMode &&
                 !inGroupMode &&
+                !inMultiSelectMode &&
                 !inTimelineMode)
             ? FloatingActionButton(
                 backgroundColor: AppTheme.primaryBlue,
@@ -277,6 +281,7 @@ class _MainScreenState extends State<MainScreen> {
     required FocusNodeModel? selectedNode,
     required FocusConnection? selectedConnection,
     required bool inGroupMode,
+    required bool inMultiSelectMode,
     required bool inArchiveMode,
     required bool inTimelineMode,
     required bool useSideNav,
@@ -324,6 +329,25 @@ class _MainScreenState extends State<MainScreen> {
                 Text(
                   '时间轴回放',
                   style: TextStyle(
+                    color: AppTheme.deepNavy,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            )
+          : inMultiSelectMode
+          ? Row(
+              children: [
+                const Icon(
+                  Icons.select_all_rounded,
+                  size: 20,
+                  color: AppTheme.primaryBlue,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '已选 ${widget.engine.multiSelectedNodeIds.length} 个节点',
+                  style: const TextStyle(
                     color: AppTheme.deepNavy,
                     fontSize: 16,
                     fontWeight: FontWeight.w800,
@@ -394,6 +418,7 @@ class _MainScreenState extends State<MainScreen> {
         selectedNode,
         selectedConnection,
         inGroupMode,
+        inMultiSelectMode,
         inArchiveMode,
         inTimelineMode,
       ),
@@ -525,46 +550,18 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
-  Widget _buildTimelineToggleSwitch(bool active) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-      child: InkWell(
-        onTap: () {
-          setState(() => _isConnectMode = false);
-          widget.engine.toggleTimelineMode(!active);
-        },
-        borderRadius: BorderRadius.circular(20),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          decoration: BoxDecoration(
-            color: active ? AppTheme.primaryBlue : AppTheme.bgCanvas,
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: active ? AppTheme.primaryBlue : AppTheme.borderLight,
-            ),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.timeline_rounded,
-                size: 15,
-                color: active ? Colors.white : AppTheme.deepNavy,
-              ),
-              const SizedBox(width: 4),
-              Text(
-                '时间轴',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  color: active ? Colors.white : AppTheme.deepNavy,
-                ),
-              ),
-            ],
-          ),
-        ),
+  /// 与右侧「框选」「连线」图标样式完全一致的时间轴开关按钮
+  Widget _buildTimelineIconButton(bool active) {
+    return IconButton(
+      icon: Icon(
+        active ? Icons.timeline : Icons.timeline_outlined,
+        color: active ? AppTheme.primaryBlue : Colors.black87,
       ),
+      tooltip: active ? '退出时间轴' : '时间轴',
+      onPressed: () {
+        setState(() => _isConnectMode = false);
+        widget.engine.toggleTimelineMode(!active);
+      },
     );
   }
 
@@ -572,18 +569,36 @@ class _MainScreenState extends State<MainScreen> {
     FocusNodeModel? selectedNode,
     FocusConnection? selectedConnection,
     bool inGroupMode,
+    bool inMultiSelectMode,
     bool inArchiveMode,
     bool inTimelineMode,
   ) {
-    // 0. 树界面时间轴模式开启态：顶部保留开启状态的时间轴开关以便一键关闭
+    // 0. 树界面时间轴模式开启态
     if (_currentViewIndex == 1 && inTimelineMode) {
       return [
-        _buildTimelineToggleSwitch(true),
+        _buildTimelineIconButton(true),
         const SizedBox(width: 8),
       ];
     }
 
-    // 1. 归档模式
+    // 1. 树界面长按框选多选态：支持批量删除与取消多选
+    if (_currentViewIndex == 1 && inMultiSelectMode) {
+      return [
+        IconButton(
+          icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+          tooltip: '批量删除选中节点',
+          onPressed: _confirmBatchDeleteNodes,
+        ),
+        IconButton(
+          icon: const Icon(Icons.close, color: Colors.black45),
+          tooltip: '取消多选',
+          onPressed: () => widget.engine.clearMultiSelection(),
+        ),
+        const SizedBox(width: 4),
+      ];
+    }
+
+    // 2. 归档模式
     if (inArchiveMode) {
       return [
         IconButton(
@@ -618,7 +633,7 @@ class _MainScreenState extends State<MainScreen> {
       ];
     }
 
-    // 2. 框选模式
+    // 3. 框选建组模式
     if (inGroupMode) {
       return [
         IconButton(
@@ -639,7 +654,7 @@ class _MainScreenState extends State<MainScreen> {
       ];
     }
 
-    // 3. 点击连线选中态
+    // 4. 点击连线选中态
     if (selectedConnection != null) {
       return [
         IconButton(
@@ -651,7 +666,7 @@ class _MainScreenState extends State<MainScreen> {
       ];
     }
 
-    // 4. 选中节点态
+    // 5. 选中节点态
     if (selectedNode != null) {
       if (selectedNode.isPrompt) {
         return [
@@ -693,6 +708,14 @@ class _MainScreenState extends State<MainScreen> {
         ),
         IconButton(
           icon: const Icon(
+            Icons.edit_outlined,
+            color: AppTheme.primaryBlue,
+          ),
+          tooltip: '编辑节点',
+          onPressed: () => _openEditDialog(context, selectedNode),
+        ),
+        IconButton(
+          icon: const Icon(
             Icons.assessment_outlined,
             color: AppTheme.primaryBlue,
           ),
@@ -703,10 +726,10 @@ class _MainScreenState extends State<MainScreen> {
       ];
     }
 
-    // 5. 树界面常规态：顶部出现时间轴开关 + 框选 + 连线
+    // 6. 树界面常规态：时间轴 + 框选 + 连线，三个图标完全统一风格
     if (_currentViewIndex == 1) {
       return [
-        _buildTimelineToggleSwitch(false),
+        _buildTimelineIconButton(false),
         IconButton(
           icon: const Icon(
             Icons.dashboard_customize_outlined,
@@ -738,7 +761,7 @@ class _MainScreenState extends State<MainScreen> {
       ];
     }
 
-    // 6. 列表界面常规态
+    // 7. 列表界面常规态
     if (_currentViewIndex == 0) {
       return [
         PopupMenuButton<String>(
@@ -778,6 +801,45 @@ class _MainScreenState extends State<MainScreen> {
     }
 
     return const [];
+  }
+
+  void _confirmBatchDeleteNodes() {
+    final count = widget.engine.multiSelectedNodeIds.length;
+    if (count == 0) return;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.surfaceWhite,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: const Text(
+          '确认批量删除？',
+          style: TextStyle(
+            color: AppTheme.deepNavy,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        content: Text('将彻底删除选中的 $count 个节点及其关联连线与历史记录。'),
+        actions: [
+          TextButton(
+            child: const Text('取消', style: TextStyle(color: Colors.black45)),
+            onPressed: () => Navigator.pop(ctx),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.redAccent,
+              foregroundColor: Colors.white,
+              elevation: 0,
+            ),
+            child: const Text('确认删除'),
+            onPressed: () {
+              widget.engine.deleteNodes(widget.engine.multiSelectedNodeIds);
+              Navigator.pop(ctx);
+            },
+          ),
+        ],
+      ),
+    );
   }
 
   void _openSaveArchivePresetDialog() {

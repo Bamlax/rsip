@@ -6,6 +6,14 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/focus_node_model.dart';
 
+/// 设置页删除数据的四种范围模式
+enum DeleteDataMode {
+  all, // 全部删除
+  keepNodes, // 保留节点（删除所有加减记录与版本修订记录）
+  keepRevisions, // 保留版本修订记录（仅删除加减/跳过记录）
+  keepProgress, // 保留加减数据（仅删除版本修订记录）
+}
+
 class RsipEngine extends ChangeNotifier {
   final List<FocusNodeModel> _nodes = [];
   final Set<FocusConnection> _connections = {};
@@ -19,6 +27,9 @@ class RsipEngine extends ChangeNotifier {
 
   bool _isGroupSelectMode = false;
   final Set<String> _groupSelectedNodeIds = {};
+
+  // 树画布长按多选状态
+  final Set<String> _multiSelectedNodeIds = {};
 
   // 归档选择模式状态
   bool _isArchiveMode = false;
@@ -79,6 +90,10 @@ class RsipEngine extends ChangeNotifier {
   Set<String> get groupSelectedNodeIds =>
       Set.unmodifiable(_groupSelectedNodeIds);
 
+  Set<String> get multiSelectedNodeIds =>
+      Set.unmodifiable(_multiSelectedNodeIds);
+  bool get isMultiSelectMode => _multiSelectedNodeIds.isNotEmpty;
+
   bool get isArchiveMode => _isArchiveMode;
   Set<String> get archiveSelectedIds => Set.unmodifiable(_archiveSelectedIds);
   String? get selectedArchivePresetId => _selectedArchivePresetId;
@@ -98,6 +113,7 @@ class RsipEngine extends ChangeNotifier {
   RsipEngine() {
     _loadFromStorage();
   }
+  
 
   // ==========================================
   // 本地持久化 (Storage)
@@ -256,6 +272,152 @@ class RsipEngine extends ChangeNotifier {
   }
 
   // ==========================================
+  // 树画布框选多选管理
+  // ==========================================
+
+  void setMultiSelectedNodes(Set<String> ids) {
+    _multiSelectedNodeIds
+      ..clear()
+      ..addAll(ids);
+    if (_multiSelectedNodeIds.isNotEmpty) {
+      _selectedNodeId = null;
+      _selectedConnection = null;
+    }
+    notifyListeners();
+  }
+
+  void toggleNodeInMultiSelect(String id) {
+    if (_multiSelectedNodeIds.contains(id)) {
+      _multiSelectedNodeIds.remove(id);
+    } else {
+      _multiSelectedNodeIds.add(id);
+      _selectedNodeId = null;
+      _selectedConnection = null;
+    }
+    notifyListeners();
+  }
+
+  void clearMultiSelection() {
+    if (_multiSelectedNodeIds.isEmpty) return;
+    _multiSelectedNodeIds.clear();
+    notifyListeners();
+  }
+
+  void setNodesPositions(
+    Map<String, ({double x, double y})> newPositions, {
+    bool save = true,
+  }) {
+    bool changed = false;
+    for (final entry in newPositions.entries) {
+      final index = _nodes.indexWhere((n) => n.id == entry.key);
+      if (index != -1) {
+        _nodes[index].x = entry.value.x;
+        _nodes[index].y = entry.value.y;
+        changed = true;
+
+        for (int i = _timelineEvents.length - 1; i >= 0; i--) {
+          if (_timelineEvents[i].targetId == entry.key &&
+              _timelineEvents[i].type == TimelineEventType.nodeCreated) {
+            final old = _timelineEvents[i];
+            _timelineEvents[i] = TimelineEventModel(
+              id: old.id,
+              type: old.type,
+              time: old.time,
+              targetId: old.targetId,
+              secondaryId: old.secondaryId,
+              title: old.title,
+              content: old.content,
+              isPrompt: old.isPrompt,
+              isArchived: old.isArchived,
+              x: entry.value.x,
+              y: entry.value.y,
+              nodeIds: old.nodeIds,
+            );
+            break;
+          }
+        }
+      }
+    }
+    if (changed) {
+      notifyListeners();
+      if (save) {
+        _saveToStorage();
+      }
+    }
+  }
+
+  void deleteNodes(Iterable<String> ids) {
+    final targetIds = ids.toSet();
+    if (targetIds.isEmpty) return;
+
+    final now = DateTime.now();
+    int seq = 0;
+
+    // 先记录关联连线移除事件
+    final relatedConns = _connections
+        .where((conn) =>
+            targetIds.contains(conn.fromId) || targetIds.contains(conn.toId))
+        .toList();
+    for (final conn in relatedConns) {
+      _timelineEvents.add(
+        TimelineEventModel(
+          id: 'evt_${now.microsecondsSinceEpoch}_c_${seq++}',
+          type: TimelineEventType.connectionRemoved,
+          time: now,
+          targetId: conn.fromId,
+          secondaryId: conn.toId,
+        ),
+      );
+    }
+
+    for (final id in targetIds) {
+      final targetNode = _nodes.where((n) => n.id == id).firstOrNull;
+      if (targetNode != null) {
+        _timelineEvents.add(
+          TimelineEventModel(
+            id: 'evt_${now.microsecondsSinceEpoch}_d_${seq++}',
+            type: TimelineEventType.nodeDeleted,
+            time: now,
+            targetId: id,
+            title: targetNode.title,
+            content: targetNode.content,
+            isPrompt: targetNode.isPrompt,
+            x: targetNode.x,
+            y: targetNode.y,
+          ),
+        );
+      }
+    }
+
+    if (_selectedNodeId != null && targetIds.contains(_selectedNodeId)) {
+      _selectedNodeId = null;
+    }
+    _nodes.removeWhere((node) => targetIds.contains(node.id));
+    _connections.removeWhere((conn) =>
+        targetIds.contains(conn.fromId) || targetIds.contains(conn.toId));
+    if (_selectedConnection != null &&
+        (targetIds.contains(_selectedConnection!.fromId) ||
+            targetIds.contains(_selectedConnection!.toId))) {
+      _selectedConnection = null;
+    }
+    _history.removeWhere((record) => targetIds.contains(record.nodeId));
+
+    for (final group in _groups) {
+      group.nodeIds.removeAll(targetIds);
+    }
+    _groups.removeWhere((group) => group.nodeIds.isEmpty);
+
+    for (final preset in _archivePresets) {
+      preset.archivedNodeIds.removeAll(targetIds);
+    }
+    _archiveSelectedIds.removeAll(targetIds);
+    _multiSelectedNodeIds.removeAll(targetIds);
+
+    notifyListeners();
+    _saveToStorage();
+  }
+
+  // ==========================================
   // 时间轴演化事件：兼容补全、播放控制与历史打分推演
   // ==========================================
 
@@ -268,6 +430,7 @@ class RsipEngine extends ChangeNotifier {
       _selectedConnection = null;
       _isGroupSelectMode = false;
       _groupSelectedNodeIds.clear();
+      _multiSelectedNodeIds.clear();
       _backfillMissingTimelineEvents();
     }
     notifyListeners();
@@ -279,7 +442,6 @@ class RsipEngine extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 为存量节点、大框与连线自动补全初始演化事件，兼容旧版本数据
   void _backfillMissingTimelineEvents() {
     final recordedCreatedNodeIds = _timelineEvents
         .where((e) => e.type == TimelineEventType.nodeCreated)
@@ -386,7 +548,6 @@ class RsipEngine extends ChangeNotifier {
     }
   }
 
-  /// 构建完整的时间轴有序事件列表（可选是否混入日常增减/跳过记录）
   List<TimelineEventModel> buildOrderedTimelineEvents({
     required bool includeProgressChanges,
   }) {
@@ -441,7 +602,6 @@ class RsipEngine extends ChangeNotifier {
     }
   }
 
-  /// 计算指定历史记录子集与参考日期下的习惯连续性得分（供时间轴回放使用）
   NodeScoreResult computeNodeScoreFromRecords({
     required String nodeId,
     required DateTime createdAt,
@@ -1039,6 +1199,7 @@ class RsipEngine extends ChangeNotifier {
     _selectedConnection = null;
     _isGroupSelectMode = false;
     _groupSelectedNodeIds.clear();
+    _multiSelectedNodeIds.clear();
     _isArchiveMode = false;
     _archiveSelectedIds.clear();
     _selectedArchivePresetId = null;
@@ -1182,27 +1343,123 @@ class RsipEngine extends ChangeNotifier {
     );
   }
 
-  // ==========================================
-  // 清空历史填充数据（保留应用与节点版本号）
+ // ==========================================
+  // 分类多选删除数据
   // ==========================================
 
-  Future<void> clearAllHistoryData() async {
-    _history.clear();
-    _lastAutoPenaltyDate = null;
+  Future<void> clearDataBySelection({
+    required bool deleteNodes,
+    required bool deleteRevisions,
+    required bool deleteProgress,
+  }) async {
+    if (!deleteNodes && !deleteRevisions && !deleteProgress) return;
 
-    for (final node in _nodes) {
-      node.progress = 0;
-      node.increaseCount = 0;
-      node.decreaseCount = 0;
-      node.latestNote = null;
-      for (final attr in node.numericAttributes) {
-        attr.totalValue = 0.0;
-        attr.count = 0;
+    if (deleteNodes) {
+      _nodes.clear();
+      _connections.clear();
+      _groups.clear();
+      _history.clear();
+      _archivePresets.clear();
+      _timelineEvents.clear();
+      _lastAutoPenaltyDate = null;
+      _selectedNodeId = null;
+      _selectedConnection = null;
+      _isGroupSelectMode = false;
+      _groupSelectedNodeIds.clear();
+      _multiSelectedNodeIds.clear();
+      _isArchiveMode = false;
+      _archiveSelectedIds.clear();
+      _selectedArchivePresetId = null;
+      _isTimelineMode = false;
+    } else {
+      if (deleteProgress) {
+        _history.removeWhere((r) => !r.isEdit);
+        _lastAutoPenaltyDate = null;
+        for (final node in _nodes) {
+          node.progress = 0;
+          node.increaseCount = 0;
+          node.decreaseCount = 0;
+          node.latestNote = null;
+          for (final attr in node.numericAttributes) {
+            attr.totalValue = 0.0;
+            attr.count = 0;
+          }
+        }
+      }
+
+      if (deleteRevisions) {
+        _history.removeWhere((r) => r.isEdit);
+        for (final node in _nodes) {
+          node.version = 1;
+          if (!deleteProgress) {
+            _recalculateNodeStats(node.id);
+          }
+        }
+        _timelineEvents.removeWhere((e) =>
+            e.type == TimelineEventType.nodeUpdated ||
+            e.type == TimelineEventType.nodeDeleted);
+        _syncTimelineCreatedSnapshotsWithNodes();
+        _backfillMissingTimelineEvents();
       }
     }
+
     notifyListeners();
     await _saveToStorage();
   }
+
+  Future<void> clearDataByMode(DeleteDataMode mode) {
+    return switch (mode) {
+      DeleteDataMode.all => clearDataBySelection(
+          deleteNodes: true,
+          deleteRevisions: true,
+          deleteProgress: true,
+        ),
+      DeleteDataMode.keepNodes => clearDataBySelection(
+          deleteNodes: false,
+          deleteRevisions: true,
+          deleteProgress: true,
+        ),
+      DeleteDataMode.keepRevisions => clearDataBySelection(
+          deleteNodes: false,
+          deleteRevisions: false,
+          deleteProgress: true,
+        ),
+      DeleteDataMode.keepProgress => clearDataBySelection(
+          deleteNodes: false,
+          deleteRevisions: true,
+          deleteProgress: false,
+        ),
+    };
+  }
+
+  /// 清理修订记录后，同步更新初始创建事件中的标题与内容快照
+  void _syncTimelineCreatedSnapshotsWithNodes() {
+    for (int i = 0; i < _timelineEvents.length; i++) {
+      final evt = _timelineEvents[i];
+      if (evt.type == TimelineEventType.nodeCreated) {
+        final node = _nodes.where((n) => n.id == evt.targetId).firstOrNull;
+        if (node != null) {
+          _timelineEvents[i] = TimelineEventModel(
+            id: evt.id,
+            type: evt.type,
+            time: evt.time,
+            targetId: evt.targetId,
+            secondaryId: evt.secondaryId,
+            title: node.title,
+            content: node.content,
+            isPrompt: node.isPrompt,
+            isArchived: node.isArchived,
+            x: node.x,
+            y: node.y,
+            nodeIds: evt.nodeIds,
+          );
+        }
+      }
+    }
+  }
+
+  Future<void> clearAllHistoryData() =>
+      clearDataByMode(DeleteDataMode.keepRevisions);
 
   // ==========================================
   // 归档管理模式与快速归档分类
@@ -1219,6 +1476,7 @@ class RsipEngine extends ChangeNotifier {
     }
     _selectedNodeId = null;
     _selectedConnection = null;
+    _multiSelectedNodeIds.clear();
     notifyListeners();
   }
 
@@ -1408,6 +1666,7 @@ class RsipEngine extends ChangeNotifier {
   void startGroupSelectMode() {
     _isGroupSelectMode = true;
     _groupSelectedNodeIds.clear();
+    _multiSelectedNodeIds.clear();
     _selectedNodeId = null;
     _selectedConnection = null;
     notifyListeners();
@@ -1487,6 +1746,7 @@ class RsipEngine extends ChangeNotifier {
     _selectedConnection = conn;
     if (conn != null) {
       _selectedNodeId = null;
+      _multiSelectedNodeIds.clear();
     }
     notifyListeners();
   }
@@ -1543,42 +1803,15 @@ class RsipEngine extends ChangeNotifier {
     } else {
       _selectedNodeId = id;
       _selectedConnection = null;
+      if (id != null) {
+        _multiSelectedNodeIds.clear();
+      }
     }
     notifyListeners();
   }
 
-  void updateNodePosition(String id, double x, double y) {
-    final index = _nodes.indexWhere((n) => n.id == id);
-    if (index != -1) {
-      _nodes[index].x = x;
-      _nodes[index].y = y;
-
-      // 同步更新该节点在时间轴中的最新坐标，使回放布局整洁清晰
-      for (int i = _timelineEvents.length - 1; i >= 0; i--) {
-        if (_timelineEvents[i].targetId == id &&
-            _timelineEvents[i].type == TimelineEventType.nodeCreated) {
-          final old = _timelineEvents[i];
-          _timelineEvents[i] = TimelineEventModel(
-            id: old.id,
-            type: old.type,
-            time: old.time,
-            targetId: old.targetId,
-            secondaryId: old.secondaryId,
-            title: old.title,
-            content: old.content,
-            isPrompt: old.isPrompt,
-            isArchived: old.isArchived,
-            x: x,
-            y: y,
-            nodeIds: old.nodeIds,
-          );
-          break;
-        }
-      }
-
-      notifyListeners();
-      _saveToStorage();
-    }
+  void updateNodePosition(String id, double x, double y, {bool save = true}) {
+    setNodesPositions({id: (x: x, y: y)}, save: save);
   }
 
   void addNode({
@@ -1638,62 +1871,7 @@ class RsipEngine extends ChangeNotifier {
   }
 
   void deleteNode(String id) {
-    final targetNode = _nodes.where((n) => n.id == id).firstOrNull;
-    final now = DateTime.now();
-
-    if (targetNode != null) {
-      // 先记录关联连线移除事件，再记录节点删除事件
-      final relatedConns = _connections
-          .where((conn) => conn.fromId == id || conn.toId == id)
-          .toList();
-      for (final conn in relatedConns) {
-        _timelineEvents.add(
-          TimelineEventModel(
-            id: 'evt_${now.microsecondsSinceEpoch}_${conn.fromId}_${conn.toId}',
-            type: TimelineEventType.connectionRemoved,
-            time: now,
-            targetId: conn.fromId,
-            secondaryId: conn.toId,
-          ),
-        );
-      }
-
-      _timelineEvents.add(
-        TimelineEventModel(
-          id: 'evt_${now.microsecondsSinceEpoch}_del',
-          type: TimelineEventType.nodeDeleted,
-          time: now,
-          targetId: id,
-          title: targetNode.title,
-          content: targetNode.content,
-          isPrompt: targetNode.isPrompt,
-          x: targetNode.x,
-          y: targetNode.y,
-        ),
-      );
-    }
-
-    if (_selectedNodeId == id) _selectedNodeId = null;
-    _nodes.removeWhere((node) => node.id == id);
-    _connections.removeWhere((conn) => conn.fromId == id || conn.toId == id);
-    if (_selectedConnection != null &&
-        (_selectedConnection!.fromId == id || _selectedConnection!.toId == id)) {
-      _selectedConnection = null;
-    }
-    _history.removeWhere((record) => record.nodeId == id);
-
-    for (final group in _groups) {
-      group.nodeIds.remove(id);
-    }
-    _groups.removeWhere((group) => group.nodeIds.isEmpty);
-
-    for (final preset in _archivePresets) {
-      preset.archivedNodeIds.remove(id);
-    }
-    _archiveSelectedIds.remove(id);
-
-    notifyListeners();
-    _saveToStorage();
+    deleteNodes([id]);
   }
 
   void updateNode(

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../core/app_theme.dart';
@@ -39,7 +40,6 @@ class _TimelineNodeSnapshot {
   int consecutiveCount = 0;
   double score = 0.0;
 
-  // 当前帧特效标记：'created' | 'updated' | 'deleted' | 'inc' | 'dec' | 'skip' | null
   String? activeEffect;
 
   _TimelineNodeSnapshot({
@@ -57,7 +57,7 @@ class _TimelineNodeSnapshot {
 class _TimelineConnectionSnapshot {
   final String fromId;
   final String toId;
-  String? activeEffect; // 'added' | 'removed' | null
+  String? activeEffect;
 
   _TimelineConnectionSnapshot({
     required this.fromId,
@@ -69,7 +69,7 @@ class _TimelineGroupSnapshot {
   final String id;
   final String title;
   final Set<String> nodeIds;
-  String? activeEffect; // 'added' | 'removed' | null
+  String? activeEffect;
 
   _TimelineGroupSnapshot({
     required this.id,
@@ -100,8 +100,8 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
   static const double _canvasHeight = 6000.0;
   static const double _normalWidth = 150.0;
   static const double _normalHeight = 70.0;
-  static const double _promptWidth = 130.0;
-  static const double _promptHeight = 55.0;
+  static const double _promptWidth = 104.0;
+  static const double _promptHeight = 50.0;
 
   String? _connectStartId;
 
@@ -110,16 +110,25 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
   Offset? _groupDragStartFingerPos;
   Map<String, Offset>? _groupDragStartPositions;
 
-  // 单个节点拖拽状态
+  // 单个或多选节点拖拽状态
   String? _draggingNodeId;
   Offset? _nodeDragStartPos;
   Offset? _nodeDragStartFingerPos;
+  Map<String, Offset>? _multiDragStartPositions;
+
+  // 长按空白界面 1 秒拉出多选框状态（无进度环提示）
+  int _activePointers = 0;
+  Timer? _marqueeHoldTimer;
+  Offset? _marqueeHoldScenePos;
+  bool _isMarqueeSelecting = false;
+  Offset? _marqueeStartScene;
+  Offset? _marqueeCurrentScene;
 
   // 时间轴回放控制状态
   bool _wasTimelineMode = false;
   bool _isTimelinePlaying = false;
   int _timelineStepIndex = 0;
-  double _playbackSpeed = 1.0; // 1.0, 2.0, 4.0
+  double _playbackSpeed = 1.0;
   Timer? _playbackTimer;
 
   @override
@@ -131,6 +140,7 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
   @override
   void dispose() {
     _playbackTimer?.cancel();
+    _cancelMarqueeHold();
     _transController.dispose();
     super.dispose();
   }
@@ -143,10 +153,51 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
     }
   }
 
+  void _cancelMarqueeHold() {
+    _marqueeHoldTimer?.cancel();
+    _marqueeHoldTimer = null;
+    _marqueeHoldScenePos = null;
+  }
+
+  bool _isPointOverAnyNode(Offset scenePos) {
+    for (final node in widget.engine.nodes) {
+      final nx = (node.x ?? _canvasWidth / 2).clamp(50.0, _canvasWidth - 50.0);
+      final ny = (node.y ?? _canvasHeight / 2).clamp(50.0, _canvasHeight - 50.0);
+      final w = node.isPrompt ? _promptWidth : _normalWidth;
+      final h = node.isPrompt ? _promptHeight : _normalHeight;
+      final rect = Rect.fromLTWH(nx, ny, w, h);
+      if (rect.contains(scenePos)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void _updateMarqueeSelection() {
+    if (_marqueeStartScene == null || _marqueeCurrentScene == null) return;
+    final selectionRect =
+        Rect.fromPoints(_marqueeStartScene!, _marqueeCurrentScene!);
+
+    final Set<String> hitIds = {};
+    for (final node in widget.engine.nodes) {
+      if (node.isArchived) continue;
+      final nx = (node.x ?? _canvasWidth / 2).clamp(50.0, _canvasWidth - 50.0);
+      final ny = (node.y ?? _canvasHeight / 2).clamp(50.0, _canvasHeight - 50.0);
+      final w = node.isPrompt ? _promptWidth : _normalWidth;
+      final h = node.isPrompt ? _promptHeight : _normalHeight;
+      final nodeRect = Rect.fromLTWH(nx, ny, w, h);
+      if (selectionRect.overlaps(nodeRect)) {
+        hitIds.add(node.id);
+      }
+    }
+    widget.engine.setMultiSelectedNodes(hitIds);
+  }
+
   void _syncTimelineLifecycle() {
     final isTimeline = widget.engine.isTimelineMode;
     if (isTimeline && !_wasTimelineMode) {
       _wasTimelineMode = true;
+      _cancelMarqueeHold();
       final events = widget.engine.buildOrderedTimelineEvents(
         includeProgressChanges: widget.engine.timelineShowProgressChanges,
       );
@@ -204,6 +255,24 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
     }
   }
 
+  void _stepTimelineBackward() {
+    _stopTimelinePlayback();
+    if (_timelineStepIndex > 0) {
+      setState(() {
+        _timelineStepIndex--;
+      });
+    }
+  }
+
+  void _stepTimelineForward(int totalEvents) {
+    _stopTimelinePlayback();
+    if (_timelineStepIndex < totalEvents - 1) {
+      setState(() {
+        _timelineStepIndex++;
+      });
+    }
+  }
+
   void _cyclePlaybackSpeed() {
     setState(() {
       if (_playbackSpeed == 1.0) {
@@ -219,7 +288,6 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
     }
   }
 
-  /// 基于有序事件列表推演截至 stepIndex 的完整画布状态快照
   _TimelineFrameState _computeTimelineFrame(
     List<TimelineEventModel> events,
     int stepIndex,
@@ -243,7 +311,6 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
       final evt = events[i];
       final isCurrentFrame = i == clampedStep;
 
-      // 清除上一帧的瞬时高亮状态
       for (final n in nodeMap.values) {
         n.activeEffect = null;
       }
@@ -406,7 +473,6 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
 
     final currentEvt = events[clampedStep];
 
-    // 若开启了「显示增减变化」，实时计算当前帧各常规节点的习惯分数
     if (showProgressChanges) {
       for (final snap in nodeMap.values) {
         if (snap.isPrompt) continue;
@@ -492,6 +558,9 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
     if (_connectStartId != null) {
       setState(() => _connectStartId = null);
     }
+    if (widget.engine.isMultiSelectMode) {
+      widget.engine.clearMultiSelection();
+    }
     widget.engine.selectNode(null);
     widget.engine.selectConnection(null);
   }
@@ -499,6 +568,7 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
   void _onCanvasDoubleTap(TapDownDetails details) {
     if (widget.engine.isTimelineMode) return;
     if (widget.engine.isGroupSelectMode) return;
+    if (widget.engine.isMultiSelectMode) return;
     final scenePos = _transController.toScene(details.localPosition);
     showDialog(
       context: context,
@@ -513,6 +583,11 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
     if (widget.engine.isTimelineMode) return;
     if (widget.engine.isGroupSelectMode) {
       widget.engine.toggleNodeInGroupSelect(node.id);
+      return;
+    }
+
+    if (widget.engine.isMultiSelectMode) {
+      widget.engine.toggleNodeInMultiSelect(node.id);
       return;
     }
 
@@ -647,41 +722,155 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
       }
     }
 
+    final Rect? activeMarqueeRect = (_isMarqueeSelecting &&
+            _marqueeStartScene != null &&
+            _marqueeCurrentScene != null)
+        ? Rect.fromPoints(_marqueeStartScene!, _marqueeCurrentScene!)
+        : null;
+
     return GestureDetector(
       onTap: _onCanvasTap,
       onDoubleTapDown: _onCanvasDoubleTap,
       child: InteractiveViewer(
         transformationController: _transController,
+        panEnabled: !_isMarqueeSelecting,
+        scaleEnabled: !_isMarqueeSelecting,
         boundaryMargin: const EdgeInsets.all(3000),
         minScale: 0.1,
         maxScale: 3.5,
         constrained: false,
-        child: Container(
-          key: _canvasKey,
-          width: _canvasWidth,
-          height: _canvasHeight,
-          decoration: const BoxDecoration(
-            color: AppTheme.bgCanvas,
-          ),
-          child: CustomPaint(
-            painter: DotGridPainter(),
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                // 1. 连线层
-                ..._buildConnections(nodePositions, groupRects),
+        child: Listener(
+          behavior: HitTestBehavior.translucent,
+          onPointerDown: (event) {
+            _activePointers++;
+            if (_activePointers > 1) {
+              _cancelMarqueeHold();
+              return;
+            }
+            if (event.buttons != kPrimaryButton) return;
+            if (widget.engine.isTimelineMode ||
+                widget.engine.isGroupSelectMode ||
+                widget.isConnectMode ||
+                _draggingNodeId != null ||
+                _draggingGroupId != null) {
+              return;
+            }
 
-                // 2. 分类大框层
-                for (final group in groups)
-                  if (groupRects.containsKey(group.id))
-                    _buildGroupBoundingBox(
-                        group, groupRects[group.id]!, nodePositions),
+            final scenePos = event.localPosition;
+            if (_isPointOverAnyNode(scenePos)) return;
 
-                // 3. 国策卡片层
-                for (final node in nodes)
-                  if (nodePositions.containsKey(node.id))
-                    _buildNodeCardWrapper(node, nodePositions[node.id]!),
-              ],
+            _cancelMarqueeHold();
+            _marqueeHoldScenePos = scenePos;
+
+            // 长按空白处 1 秒后直接开启框选（无视觉提示）
+            _marqueeHoldTimer = Timer(const Duration(seconds: 1), () {
+              if (!mounted || _activePointers != 1) return;
+              HapticFeedback.mediumImpact();
+              setState(() {
+                _marqueeHoldScenePos = null;
+                _isMarqueeSelecting = true;
+                _marqueeStartScene = scenePos;
+                _marqueeCurrentScene = scenePos;
+              });
+              _updateMarqueeSelection();
+            });
+          },
+          onPointerMove: (event) {
+            if (_isMarqueeSelecting) {
+              setState(() {
+                _marqueeCurrentScene = event.localPosition;
+              });
+              _updateMarqueeSelection();
+              return;
+            }
+
+            if (_marqueeHoldTimer != null && _marqueeHoldScenePos != null) {
+              final scale = _transController.value.getMaxScaleOnAxis();
+              final screenDist =
+                  (event.localPosition - _marqueeHoldScenePos!).distance *
+                      scale;
+              if (screenDist > 12.0) {
+                _cancelMarqueeHold();
+              }
+            }
+          },
+          onPointerUp: (_) {
+            _activePointers = math.max(0, _activePointers - 1);
+            _cancelMarqueeHold();
+            if (_isMarqueeSelecting) {
+              setState(() {
+                _isMarqueeSelecting = false;
+                _marqueeStartScene = null;
+                _marqueeCurrentScene = null;
+              });
+            }
+          },
+          onPointerCancel: (_) {
+            _activePointers = math.max(0, _activePointers - 1);
+            _cancelMarqueeHold();
+            if (_isMarqueeSelecting) {
+              setState(() {
+                _isMarqueeSelecting = false;
+                _marqueeStartScene = null;
+                _marqueeCurrentScene = null;
+              });
+            }
+          },
+          child: Container(
+            key: _canvasKey,
+            width: _canvasWidth,
+            height: _canvasHeight,
+            decoration: const BoxDecoration(
+              color: AppTheme.bgCanvas,
+            ),
+            child: CustomPaint(
+              painter: DotGridPainter(),
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  // 1. 连线视觉绘制层
+                  ..._buildConnectionVisuals(nodePositions, groupRects),
+
+                  // 2. 分类大框层
+                  for (final group in groups)
+                    if (groupRects.containsKey(group.id))
+                      _buildGroupBoundingBox(
+                          group, groupRects[group.id]!, nodePositions),
+
+                  // 3. 连线精确点击检测层
+                  if (!widget.isConnectMode &&
+                      !widget.engine.isGroupSelectMode &&
+                      !_isMarqueeSelecting)
+                    ..._buildConnectionHitTargets(nodePositions, groupRects),
+
+                  // 4. 国策卡片层
+                  for (final node in nodes)
+                    if (nodePositions.containsKey(node.id))
+                      _buildNodeCardWrapper(
+                          node, nodePositions[node.id]!, nodePositions),
+
+                  // 5. 框选矩形遮罩层
+                  if (activeMarqueeRect != null)
+                    Positioned(
+                      left: activeMarqueeRect.left,
+                      top: activeMarqueeRect.top,
+                      width: activeMarqueeRect.width,
+                      height: activeMarqueeRect.height,
+                      child: IgnorePointer(
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: AppTheme.primaryBlue.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(
+                              color: AppTheme.primaryBlue,
+                              width: 1.8,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
         ),
@@ -741,7 +930,6 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
 
     return Stack(
       children: [
-        // 1. 底层可缩放平移只读画布
         InteractiveViewer(
           transformationController: _transController,
           boundaryMargin: const EdgeInsets.all(3000),
@@ -760,15 +948,12 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
               child: Stack(
                 clipBehavior: Clip.none,
                 children: [
-                  // 连线演化层
                   ..._buildTimelineConnections(
                     frame.connections,
                     frame.nodes,
                     nodePositions,
                     groupRects,
                   ),
-
-                  // 大框演化层
                   for (final group in frame.groups)
                     if (groupRects.containsKey(group.id))
                       _buildTimelineGroupBox(
@@ -777,8 +962,6 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
                         frame.nodes,
                         showChanges,
                       ),
-
-                  // 节点卡片演化层（支持增删改查动画与增减浮标）
                   for (final snap in frame.nodes)
                     _buildTimelineNodeCard(snap, showChanges),
                 ],
@@ -787,7 +970,6 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
           ),
         ),
 
-        // 2. 顶部时间轴播放控制条
         Positioned(
           left: 0,
           right: 0,
@@ -820,9 +1002,15 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
                 : Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      // 第一行：播放/暂停 + 进度滑块 + 倍速
                       Row(
                         children: [
+                          _buildStepControlButton(
+                            icon: Icons.skip_previous_rounded,
+                            tooltip: '上一帧',
+                            enabled: safeStep > 0,
+                            onTap: _stepTimelineBackward,
+                          ),
+                          const SizedBox(width: 6),
                           InkWell(
                             onTap: () {
                               if (_isTimelinePlaying) {
@@ -848,7 +1036,14 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
                               ),
                             ),
                           ),
-                          const SizedBox(width: 8),
+                          const SizedBox(width: 6),
+                          _buildStepControlButton(
+                            icon: Icons.skip_next_rounded,
+                            tooltip: '下一帧',
+                            enabled: safeStep < events.length - 1,
+                            onTap: () => _stepTimelineForward(events.length),
+                          ),
+                          const SizedBox(width: 6),
                           Expanded(
                             child: SliderTheme(
                               data: SliderTheme.of(context).copyWith(
@@ -916,8 +1111,6 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
                         ],
                       ),
                       const SizedBox(height: 4),
-
-                      // 第二行：当前事件时间戳与动作标签 + 「显示增减变化」选项开关
                       Row(
                         children: [
                           if (frame.currentEvent != null)
@@ -964,7 +1157,6 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
                           else
                             const Spacer(),
                           const SizedBox(width: 8),
-                          // 选项开关：是否在时间轴中看到增加减少的变化
                           InkWell(
                             onTap: () {
                               final currentEvtId = frame.currentEvent?.id;
@@ -1046,6 +1238,35 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildStepControlButton({
+    required IconData icon,
+    required String tooltip,
+    required bool enabled,
+    required VoidCallback onTap,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: enabled ? onTap : null,
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          width: 28,
+          height: 28,
+          decoration: BoxDecoration(
+            color: AppTheme.bgCanvas,
+            shape: BoxShape.circle,
+            border: Border.all(color: AppTheme.borderLight),
+          ),
+          child: Icon(
+            icon,
+            size: 18,
+            color: enabled ? AppTheme.deepNavy : Colors.black26,
+          ),
+        ),
+      ),
     );
   }
 
@@ -1264,7 +1485,7 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
       baseBorderColor = Colors.blueGrey.shade500;
       baseCardBg = const Color(0xFFF1F5F9);
     } else if (snap.isPrompt) {
-      baseBorderColor = const Color(0xFFCBD5E1);
+      baseBorderColor = Colors.black;
       baseCardBg = AppTheme.surfaceWhite;
     } else if (showChanges) {
       final activeBorder = switch (displayMode) {
@@ -1287,7 +1508,6 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
       baseCardBg = AppTheme.surfaceWhite;
     }
 
-    // 浮标提示（+1 / -1 / 跳过 / 新增 / 修订 / 删除）
     String? badgeLabel;
     Color? badgeColor;
     if (isCreated) {
@@ -1337,47 +1557,71 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
         child: Stack(
           clipBehavior: Clip.none,
           children: [
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 220),
-              width: w,
-              height: h,
-              padding: EdgeInsets.symmetric(
-                horizontal: 10,
-                vertical: snap.isPrompt ? 8 : 8,
-              ),
-              decoration: BoxDecoration(
-                color: baseCardBg,
-                borderRadius: BorderRadius.circular(snap.isPrompt ? 8 : 10),
-                border: Border.all(
-                  color: baseBorderColor,
-                  width: effect != null ? 2.0 : 1.4,
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: effect != null
-                        ? baseBorderColor.withValues(alpha: 0.25)
-                        : Colors.black.withValues(alpha: 0.05),
-                    blurRadius: effect != null ? 8 : 4,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
-              ),
-              child: snap.isPrompt
-                  ? Center(
+            snap.isPrompt
+                ? AnimatedContainer(
+                    duration: const Duration(milliseconds: 220),
+                    width: w,
+                    height: h,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: baseCardBg,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: isDeleted ? Colors.redAccent : Colors.black,
+                        width: effect != null ? 2.0 : 1.4,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.06),
+                          blurRadius: effect != null ? 8 : 4,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Center(
                       child: Text(
                         snap.content,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         textAlign: TextAlign.center,
                         style: const TextStyle(
-                          fontSize: 11.5,
+                          fontSize: 11,
                           fontWeight: FontWeight.w500,
                           color: Colors.black87,
                           height: 1.25,
                         ),
                       ),
-                    )
-                  : Column(
+                    ),
+                  )
+                : AnimatedContainer(
+                    duration: const Duration(milliseconds: 220),
+                    width: w,
+                    height: h,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: baseCardBg,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: baseBorderColor,
+                        width: effect != null ? 2.0 : 1.4,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: effect != null
+                              ? baseBorderColor.withValues(alpha: 0.25)
+                              : Colors.black.withValues(alpha: 0.05),
+                          blurRadius: effect != null ? 8 : 4,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
@@ -1496,9 +1740,8 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
                         ),
                       ],
                     ),
-            ),
+                  ),
 
-            // 瞬时状态浮标胶囊
             if (badgeLabel != null && badgeColor != null)
               Positioned(
                 right: -4,
@@ -1572,13 +1815,15 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
         final isRemoved = conn.activeEffect == 'removed';
 
         widgets.add(
-          CustomPaint(
-            size: const Size(_canvasWidth, _canvasHeight),
-            painter: BezierConnectionPainter(
-              start: fromCenter,
-              end: toCenter,
-              isSelected: isAdded,
-              isRemoved: isRemoved,
+          IgnorePointer(
+            child: CustomPaint(
+              size: const Size(_canvasWidth, _canvasHeight),
+              painter: BezierConnectionPainter(
+                start: fromCenter,
+                end: toCenter,
+                isSelected: isAdded,
+                isRemoved: isRemoved,
+              ),
             ),
           ),
         );
@@ -1643,6 +1888,7 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
         behavior: HitTestBehavior.opaque,
         onTap: () => _onGroupTap(group),
         onLongPressStart: (details) {
+          _cancelMarqueeHold();
           HapticFeedback.mediumImpact();
           final renderBox =
               _canvasKey.currentContext?.findRenderObject() as RenderBox?;
@@ -1666,18 +1912,30 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
               final currentFinger =
                   renderBox.globalToLocal(details.globalPosition);
               final delta = currentFinger - _groupDragStartFingerPos!;
+              final Map<String, ({double x, double y})> updated = {};
               for (final entry in _groupDragStartPositions!.entries) {
                 final initPos = entry.value;
-                widget.engine.updateNodePosition(
-                  entry.key,
-                  (initPos.dx + delta.dx).clamp(50.0, _canvasWidth - 50.0),
-                  (initPos.dy + delta.dy).clamp(50.0, _canvasHeight - 50.0),
+                updated[entry.key] = (
+                  x: (initPos.dx + delta.dx).clamp(50.0, _canvasWidth - 50.0),
+                  y: (initPos.dy + delta.dy).clamp(50.0, _canvasHeight - 50.0),
                 );
               }
+              widget.engine.setNodesPositions(updated, save: false);
             }
           }
         },
         onLongPressEnd: (details) {
+          if (_groupDragStartPositions != null) {
+            final Map<String, ({double x, double y})> finalPositions = {};
+            for (final id in _groupDragStartPositions!.keys) {
+              final n =
+                  widget.engine.nodes.where((item) => item.id == id).firstOrNull;
+              if (n != null && n.x != null && n.y != null) {
+                finalPositions[id] = (x: n.x!, y: n.y!);
+              }
+            }
+            widget.engine.setNodesPositions(finalPositions, save: true);
+          }
           setState(() {
             _draggingGroupId = null;
             _groupDragStartFingerPos = null;
@@ -1816,11 +2074,19 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
     );
   }
 
-  Widget _buildNodeCardWrapper(FocusNodeModel node, Offset pos) {
+  Widget _buildNodeCardWrapper(
+    FocusNodeModel node,
+    Offset pos,
+    Map<String, Offset> allPositions,
+  ) {
     final isSelectedSingle = node.id == widget.engine.selectedNodeId;
     final isHighlightedGroup =
-        widget.engine.groupSelectedNodeIds.contains(node.id);
-    final isDragging = _draggingNodeId == node.id;
+        widget.engine.groupSelectedNodeIds.contains(node.id) ||
+            widget.engine.multiSelectedNodeIds.contains(node.id);
+    final isDragging = _draggingNodeId == node.id ||
+        (_draggingNodeId != null &&
+            _multiDragStartPositions != null &&
+            _multiDragStartPositions!.containsKey(node.id));
     final isConnectSelected = node.id == _connectStartId;
 
     return Positioned(
@@ -1829,12 +2095,24 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
       child: GestureDetector(
         onTap: () => _onNodeTap(node),
         onPanStart: (details) {
+          _cancelMarqueeHold();
           final renderBox =
               _canvasKey.currentContext?.findRenderObject() as RenderBox?;
           if (renderBox != null) {
             _nodeDragStartFingerPos =
                 renderBox.globalToLocal(details.globalPosition);
             _nodeDragStartPos = pos;
+
+            final multiIds = widget.engine.multiSelectedNodeIds;
+            if (multiIds.isNotEmpty && multiIds.contains(node.id)) {
+              _multiDragStartPositions = {
+                for (final id in multiIds)
+                  if (allPositions.containsKey(id)) id: allPositions[id]!,
+              };
+            } else {
+              _multiDragStartPositions = null;
+            }
+
             setState(() => _draggingNodeId = node.id);
           }
         },
@@ -1848,26 +2126,34 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
               final currentFingerPos =
                   renderBox.globalToLocal(details.globalPosition);
               final delta = currentFingerPos - _nodeDragStartFingerPos!;
-              widget.engine.updateNodePosition(
-                node.id,
-                (_nodeDragStartPos!.dx + delta.dx)
-                    .clamp(50.0, _canvasWidth - 50.0),
-                (_nodeDragStartPos!.dy + delta.dy)
-                    .clamp(50.0, _canvasHeight - 50.0),
-              );
+
+              if (_multiDragStartPositions != null &&
+                  _multiDragStartPositions!.isNotEmpty) {
+                final Map<String, ({double x, double y})> updated = {};
+                for (final entry in _multiDragStartPositions!.entries) {
+                  updated[entry.key] = (
+                    x: (entry.value.dx + delta.dx)
+                        .clamp(50.0, _canvasWidth - 50.0),
+                    y: (entry.value.dy + delta.dy)
+                        .clamp(50.0, _canvasHeight - 50.0),
+                  );
+                }
+                widget.engine.setNodesPositions(updated, save: false);
+              } else {
+                widget.engine.updateNodePosition(
+                  node.id,
+                  (_nodeDragStartPos!.dx + delta.dx)
+                      .clamp(50.0, _canvasWidth - 50.0),
+                  (_nodeDragStartPos!.dy + delta.dy)
+                      .clamp(50.0, _canvasHeight - 50.0),
+                  save: false,
+                );
+              }
             }
           }
         },
-        onPanEnd: (_) => setState(() {
-          _draggingNodeId = null;
-          _nodeDragStartPos = null;
-          _nodeDragStartFingerPos = null;
-        }),
-        onPanCancel: () => setState(() {
-          _draggingNodeId = null;
-          _nodeDragStartPos = null;
-          _nodeDragStartFingerPos = null;
-        }),
+        onPanEnd: (_) => _finishNodeDrag(),
+        onPanCancel: () => _finishNodeDrag(),
         child: node.isPrompt
             ? _buildPromptNodeCard(
                 node, isSelectedSingle, isHighlightedGroup, isDragging)
@@ -1879,6 +2165,36 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
               ),
       ),
     );
+  }
+
+  void _finishNodeDrag() {
+    if (_draggingNodeId != null) {
+      if (_multiDragStartPositions != null &&
+          _multiDragStartPositions!.isNotEmpty) {
+        final Map<String, ({double x, double y})> finalPositions = {};
+        for (final id in _multiDragStartPositions!.keys) {
+          final n =
+              widget.engine.nodes.where((item) => item.id == id).firstOrNull;
+          if (n != null && n.x != null && n.y != null) {
+            finalPositions[id] = (x: n.x!, y: n.y!);
+          }
+        }
+        widget.engine.setNodesPositions(finalPositions, save: true);
+      } else {
+        final n = widget.engine.nodes
+            .where((item) => item.id == _draggingNodeId)
+            .firstOrNull;
+        if (n != null && n.x != null && n.y != null) {
+          widget.engine.updateNodePosition(n.id, n.x!, n.y!, save: true);
+        }
+      }
+    }
+    setState(() {
+      _draggingNodeId = null;
+      _nodeDragStartPos = null;
+      _nodeDragStartFingerPos = null;
+      _multiDragStartPositions = null;
+    });
   }
 
   Widget _buildNormalNodeCard(
@@ -1941,7 +2257,7 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
                 : isHighlighted
                     ? AppTheme.primaryBlue
                     : activeBorderColor.withValues(alpha: 0.55),
-            width: 1.5,
+            width: isHighlighted ? 2.0 : 1.5,
           ),
           boxShadow: [
             BoxShadow(
@@ -2082,6 +2398,7 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
     );
   }
 
+  /// 提示节点：更窄尺寸 + 全黑边框 + 文字居中
   Widget _buildPromptNodeCard(
     FocusNodeModel node,
     bool isSelectedSingle,
@@ -2093,17 +2410,13 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
     return Container(
       width: _promptWidth,
       height: _promptHeight,
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       decoration: BoxDecoration(
         color: isHighlighted ? AppTheme.subtleFill : AppTheme.surfaceWhite,
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
-          color: isDragging
-              ? AppTheme.skyBlue
-              : isHighlighted
-                  ? AppTheme.primaryBlue
-                  : const Color(0xFFCBD5E1),
-          width: isHighlighted ? 1.5 : 1.2,
+          color: Colors.black,
+          width: (isHighlighted || isDragging) ? 2.0 : 1.4,
         ),
         boxShadow: [
           BoxShadow(
@@ -2124,7 +2437,7 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
               overflow: TextOverflow.ellipsis,
               textAlign: TextAlign.center,
               style: const TextStyle(
-                fontSize: 11.5,
+                fontSize: 11,
                 fontWeight: FontWeight.w500,
                 color: Colors.black87,
                 height: 1.25,
@@ -2143,87 +2456,119 @@ class _NodeCanvasViewState extends State<NodeCanvasView> {
     );
   }
 
-  List<Widget> _buildConnections(
+  ({Offset start, Offset end, bool isFaded})? _resolveConnectionEndpoints(
+    FocusConnection conn,
+    Map<String, Offset> nodePositions,
+    Map<String, Rect> groupRects,
+  ) {
+    final fromNode =
+        widget.engine.nodes.where((n) => n.id == conn.fromId).firstOrNull;
+    final toNode =
+        widget.engine.nodes.where((n) => n.id == conn.toId).firstOrNull;
+
+    final isFaded = (fromNode != null && fromNode.isArchived) ||
+        (toNode != null && toNode.isArchived);
+
+    Offset? fromCenter;
+    Offset? toCenter;
+
+    if (groupRects.containsKey(conn.fromId)) {
+      fromCenter = groupRects[conn.fromId]!.center;
+    } else if (nodePositions.containsKey(conn.fromId)) {
+      final pos = nodePositions[conn.fromId]!;
+      final w = fromNode?.isPrompt == true ? _promptWidth : _normalWidth;
+      final h = fromNode?.isPrompt == true ? _promptHeight : _normalHeight;
+      fromCenter = Offset(pos.dx + w / 2, pos.dy + h / 2);
+    }
+
+    if (groupRects.containsKey(conn.toId)) {
+      toCenter = groupRects[conn.toId]!.center;
+    } else if (nodePositions.containsKey(conn.toId)) {
+      final pos = nodePositions[conn.toId]!;
+      final w = toNode?.isPrompt == true ? _promptWidth : _normalWidth;
+      final h = toNode?.isPrompt == true ? _promptHeight : _normalHeight;
+      toCenter = Offset(pos.dx + w / 2, pos.dy + h / 2);
+    }
+
+    if (fromCenter == null || toCenter == null) return null;
+    return (start: fromCenter, end: toCenter, isFaded: isFaded);
+  }
+
+  List<Widget> _buildConnectionVisuals(
     Map<String, Offset> nodePositions,
     Map<String, Rect> groupRects,
   ) {
     final widgets = <Widget>[];
 
     for (final conn in widget.engine.connections) {
-      final fromNode =
-          widget.engine.nodes.where((n) => n.id == conn.fromId).firstOrNull;
-      final toNode =
-          widget.engine.nodes.where((n) => n.id == conn.toId).firstOrNull;
+      final resolved =
+          _resolveConnectionEndpoints(conn, nodePositions, groupRects);
+      if (resolved == null) continue;
 
-      final isFaded = (fromNode != null && fromNode.isArchived) ||
-          (toNode != null && toNode.isArchived);
-
-      Offset? fromCenter;
-      Offset? toCenter;
-
-      if (groupRects.containsKey(conn.fromId)) {
-        fromCenter = groupRects[conn.fromId]!.center;
-      } else if (nodePositions.containsKey(conn.fromId)) {
-        final pos = nodePositions[conn.fromId]!;
-        final w = fromNode?.isPrompt == true ? _promptWidth : _normalWidth;
-        final h = fromNode?.isPrompt == true ? _promptHeight : _normalHeight;
-        fromCenter = Offset(pos.dx + w / 2, pos.dy + h / 2);
-      }
-
-      if (groupRects.containsKey(conn.toId)) {
-        toCenter = groupRects[conn.toId]!.center;
-      } else if (nodePositions.containsKey(conn.toId)) {
-        final pos = nodePositions[conn.toId]!;
-        final w = toNode?.isPrompt == true ? _promptWidth : _normalWidth;
-        final h = toNode?.isPrompt == true ? _promptHeight : _normalHeight;
-        toCenter = Offset(pos.dx + w / 2, pos.dy + h / 2);
-      }
-
-      if (fromCenter != null && toCenter != null) {
-        final isSelected = conn == widget.engine.selectedConnection;
-        widgets.add(
-          CustomPaint(
+      final isSelected = conn == widget.engine.selectedConnection;
+      widgets.add(
+        IgnorePointer(
+          child: CustomPaint(
             size: const Size(_canvasWidth, _canvasHeight),
             painter: BezierConnectionPainter(
-              start: fromCenter,
-              end: toCenter,
+              start: resolved.start,
+              end: resolved.end,
               isSelected: isSelected,
-              isFaded: isFaded,
+              isFaded: resolved.isFaded,
             ),
           ),
-        );
+        ),
+      );
+    }
 
-        final mid = Offset((fromCenter.dx + toCenter.dx) / 2,
-            (fromCenter.dy + toCenter.dy) / 2);
-        widgets.add(
-          Positioned(
-            left: mid.dx - 18,
-            top: mid.dy - 18,
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () => widget.engine.selectConnection(conn),
-              child: Container(
-                width: 36,
-                height: 36,
-                color: Colors.transparent,
-              ),
+    return widgets;
+  }
+
+  List<Widget> _buildConnectionHitTargets(
+    Map<String, Offset> nodePositions,
+    Map<String, Rect> groupRects,
+  ) {
+    final widgets = <Widget>[];
+
+    for (final conn in widget.engine.connections) {
+      final resolved =
+          _resolveConnectionEndpoints(conn, nodePositions, groupRects);
+      if (resolved == null) continue;
+
+      final isSelected = conn == widget.engine.selectedConnection;
+      widgets.add(
+        GestureDetector(
+          behavior: HitTestBehavior.deferToChild,
+          onTap: () {
+            _cancelMarqueeHold();
+            widget.engine.selectConnection(conn);
+          },
+          child: CustomPaint(
+            size: const Size(_canvasWidth, _canvasHeight),
+            painter: BezierConnectionPainter(
+              start: resolved.start,
+              end: resolved.end,
+              isSelected: isSelected,
+              isFaded: resolved.isFaded,
+              hitTestOnly: true,
             ),
           ),
-        );
-      }
+        ),
+      );
     }
 
     return widgets;
   }
 }
 
-/// 贝塞尔平滑连线绘制器
+/// 贝塞尔平滑连线绘制器（内置整条曲线精确点击命中检测）
 class BezierConnectionPainter extends CustomPainter {
   final Offset start;
   final Offset end;
   final bool isSelected;
   final bool isFaded;
   final bool isRemoved;
+  final bool hitTestOnly;
 
   BezierConnectionPainter({
     required this.start,
@@ -2231,20 +2576,10 @@ class BezierConnectionPainter extends CustomPainter {
     required this.isSelected,
     this.isFaded = false,
     this.isRemoved = false,
+    this.hitTestOnly = false,
   });
 
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = isRemoved
-          ? Colors.redAccent.withValues(alpha: 0.7)
-          : isSelected
-              ? AppTheme.primaryBlue
-              : AppTheme.primaryBlue.withValues(alpha: isFaded ? 0.15 : 0.35)
-      ..strokeWidth = (isSelected || isRemoved) ? 3.0 : 1.5
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
-
+  Path _buildCurvePath() {
     final path = Path();
     path.moveTo(start.dx, start.dy);
 
@@ -2260,6 +2595,89 @@ class BezierConnectionPainter extends CustomPainter {
       end.dx,
       end.dy,
     );
+    return path;
+  }
+
+  Offset _evalCubic(Offset p0, Offset p1, Offset p2, Offset p3, double t) {
+    final u = 1.0 - t;
+    final tt = t * t;
+    final uu = u * u;
+    final uuu = uu * u;
+    final ttt = tt * t;
+    return Offset(
+      uuu * p0.dx + 3 * uu * t * p1.dx + 3 * u * tt * p2.dx + ttt * p3.dx,
+      uuu * p0.dy + 3 * uu * t * p1.dy + 3 * u * tt * p2.dy + ttt * p3.dy,
+    );
+  }
+
+  double _distanceToSegment(Offset p, Offset a, Offset b) {
+    final ab = b - a;
+    final lenSq = ab.dx * ab.dx + ab.dy * ab.dy;
+    if (lenSq == 0) return (p - a).distance;
+    final t = (((p.dx - a.dx) * ab.dx + (p.dy - a.dy) * ab.dy) / lenSq)
+        .clamp(0.0, 1.0);
+    final proj = Offset(a.dx + t * ab.dx, a.dy + t * ab.dy);
+    return (p - proj).distance;
+  }
+
+  @override
+  bool? hitTest(Offset position) {
+    final dx = (end.dx - start.dx).abs();
+    final dy = (end.dy - start.dy).abs();
+    final controlOffset = math.max(dx * 0.45, dy * 0.3);
+
+    final p0 = start;
+    final p1 = Offset(
+      start.dx + (end.dx > start.dx ? controlOffset : -controlOffset),
+      start.dy,
+    );
+    final p2 = Offset(
+      end.dx + (end.dx > start.dx ? -controlOffset : controlOffset),
+      end.dy,
+    );
+    final p3 = end;
+
+    final bounds = Rect.fromPoints(p0, p3)
+        .expandToInclude(Rect.fromPoints(p1, p2))
+        .inflate(22.0);
+    if (!bounds.contains(position)) return false;
+
+    const int steps = 20;
+    Offset prev = p0;
+    for (int i = 1; i <= steps; i++) {
+      final curr = _evalCubic(p0, p1, p2, p3, i / steps);
+      if (_distanceToSegment(position, prev, curr) <= 18.0) {
+        return true;
+      }
+      prev = curr;
+    }
+    return false;
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (hitTestOnly) return;
+
+    final path = _buildCurvePath();
+
+    if (isSelected) {
+      final haloPaint = Paint()
+        ..color = AppTheme.primaryBlue.withValues(alpha: 0.18)
+        ..strokeWidth = 7.5
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round;
+      canvas.drawPath(path, haloPaint);
+    }
+
+    final paint = Paint()
+      ..color = isRemoved
+          ? Colors.redAccent.withValues(alpha: 0.7)
+          : isSelected
+              ? AppTheme.primaryBlue
+              : AppTheme.primaryBlue.withValues(alpha: isFaded ? 0.15 : 0.35)
+      ..strokeWidth = (isSelected || isRemoved) ? 3.0 : 1.5
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
 
     canvas.drawPath(path, paint);
   }
@@ -2270,7 +2688,8 @@ class BezierConnectionPainter extends CustomPainter {
         oldDelegate.end != end ||
         oldDelegate.isSelected != isSelected ||
         oldDelegate.isFaded != isFaded ||
-        oldDelegate.isRemoved != isRemoved;
+        oldDelegate.isRemoved != isRemoved ||
+        oldDelegate.hitTestOnly != hitTestOnly;
   }
 }
 

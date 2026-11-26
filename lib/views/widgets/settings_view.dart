@@ -216,46 +216,217 @@ class SettingsView extends StatelessWidget {
   }
 
   void _confirmClearData(BuildContext context) {
+    bool deleteProgress = true;
+    bool deleteRevisions = false;
+    bool deleteNodes = false;
+
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppTheme.surfaceWhite,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        title: const Text(
-          '确认删除历史填充数据？',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.deepNavy),
-        ),
-        content: const Text(
-          '将清空所有历史打卡记录、备注与属性累计数值，各节点得分与计数将重新开始计算（应用版本号与国策版本号将完整保留）。',
-          style: TextStyle(fontSize: 13, color: Colors.black87, height: 1.4),
-        ),
-        actions: [
-          TextButton(
-            child: const Text('取消', style: TextStyle(color: Colors.black45)),
-            onPressed: () => Navigator.pop(ctx),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.redAccent,
-              foregroundColor: Colors.white,
-              elevation: 0,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final isAllSelected =
+              deleteProgress && deleteRevisions && deleteNodes;
+          final hasAnySelected =
+              deleteProgress || deleteRevisions || deleteNodes;
+
+          return AlertDialog(
+            backgroundColor: AppTheme.surfaceWhite,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
             ),
-            child: const Text('确认删除'),
-            onPressed: () async {
-              await engine.clearAllHistoryData();
-              if (ctx.mounted) Navigator.pop(ctx);
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('已清空全部历史填充数据（版本号已保留）'),
-                    behavior: SnackBarBehavior.floating,
+            title: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  '选择要删除的数据',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: AppTheme.deepNavy,
                   ),
-                );
-              }
-            },
+                ),
+                TextButton(
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                  ),
+                  onPressed: () {
+                    setDialogState(() {
+                      final next = !isAllSelected;
+                      deleteProgress = next;
+                      deleteRevisions = next;
+                      deleteNodes = next;
+                    });
+                  },
+                  child: Text(
+                    isAllSelected ? '取消全选' : '全部删除',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: AppTheme.primaryBlue,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _buildDeleteCheckItem(
+                      title: '加减与跳过记录',
+                      subtitle: '清空所有打卡、跳过记录、备注与属性累计数值',
+                      checked: deleteProgress,
+                      locked: deleteNodes,
+                      danger: false,
+                      onTap: () {
+                        if (deleteNodes) return;
+                        setDialogState(
+                            () => deleteProgress = !deleteProgress);
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    _buildDeleteCheckItem(
+                      title: '版本修订记录',
+                      subtitle: '清空节点标题与内容修订历史，版本号重置为 v1',
+                      checked: deleteRevisions,
+                      locked: deleteNodes,
+                      danger: false,
+                      onTap: () {
+                        if (deleteNodes) return;
+                        setDialogState(
+                            () => deleteRevisions = !deleteRevisions);
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    _buildDeleteCheckItem(
+                      title: '国策节点与连线',
+                      subtitle: '删除全部国策、提示节点、连线及大框（同时清空关联记录）',
+                      checked: deleteNodes,
+                      locked: false,
+                      danger: true,
+                      onTap: () {
+                        setDialogState(() {
+                          deleteNodes = !deleteNodes;
+                          if (deleteNodes) {
+                            deleteProgress = true;
+                            deleteRevisions = true;
+                          }
+                        });
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                child: const Text('取消', style: TextStyle(color: Colors.black45)),
+                onPressed: () => Navigator.pop(ctx),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.redAccent,
+                  foregroundColor: Colors.white,
+                  disabledBackgroundColor: Colors.black12,
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+                onPressed: !hasAnySelected
+                    ? null
+                    : () async {
+                        await engine.clearDataBySelection(
+                          deleteNodes: deleteNodes,
+                          deleteRevisions: deleteRevisions,
+                          deleteProgress: deleteProgress,
+                        );
+                        if (ctx.mounted) Navigator.pop(ctx);
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('已按所选范围删除数据'),
+                              behavior: SnackBarBehavior.floating,
+                            ),
+                          );
+                        }
+                      },
+                child: const Text('确认删除'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildDeleteCheckItem({
+    required String title,
+    required String subtitle,
+    required bool checked,
+    required bool locked,
+    required bool danger,
+    required VoidCallback onTap,
+  }) {
+    final activeColor = danger ? Colors.redAccent : AppTheme.primaryBlue;
+
+    return InkWell(
+      onTap: locked ? null : onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Opacity(
+        opacity: locked ? 0.7 : 1.0,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: checked
+                ? (danger ? const Color(0xFFFEF2F2) : AppTheme.subtleFill)
+                : AppTheme.bgCanvas,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: checked ? activeColor : AppTheme.borderLight,
+              width: checked ? 1.4 : 1.0,
+            ),
           ),
-        ],
+          child: Row(
+            children: [
+              Icon(
+                checked
+                    ? Icons.check_box_rounded
+                    : Icons.check_box_outline_blank_rounded,
+                size: 19,
+                color: checked ? activeColor : Colors.black38,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.bold,
+                        color: checked ? activeColor : AppTheme.deepNavy,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: Colors.black54,
+                        height: 1.3,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -432,7 +603,7 @@ class SettingsView extends StatelessWidget {
                   style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.redAccent),
                 ),
                 subtitle: const Text(
-                  '清空全部历史填充记录与统计数据（保留版本号）',
+                  '支持多选删除节点、版本修订记录或加减数据',
                   style: TextStyle(fontSize: 12, color: Colors.black45),
                 ),
                 trailing: const Icon(Icons.delete_sweep_outlined, color: Colors.redAccent),
